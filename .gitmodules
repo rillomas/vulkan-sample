@@ -1,0 +1,6 @@
+[submodule "external/--recurse-submodules"]
+	path = external/--recurse-submodules
+	url = https://github.com/KhronosGroup/Vulkan-Hpp
+[submodule "external/Vulkan-Hpp"]
+	path = external/Vulkan-Hpp
+	url = https://github.com/KhronosGroup/Vulkan-Hpp
