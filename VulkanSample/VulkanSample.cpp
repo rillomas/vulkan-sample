@@ -31,7 +31,7 @@ static VkResult EnumerateExtensions(std::vector<VkExtensionProperties>* extensio
 }
 
 
-static VkResult InitVulkan(const char* appName) {
+static VkResult InitVulkan(VkInstance* instance, const char* appName) {
 	std::vector<VkExtensionProperties> extensionList;
 	auto result = EnumerateExtensions(&extensionList);
 	if (result != VK_SUCCESS) {
@@ -41,7 +41,6 @@ static VkResult InitVulkan(const char* appName) {
 		std::cout << ex.extensionName << std::endl;
 	}
 
-	VkInstance instance;
 	VkApplicationInfo appInfo;
 	appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
 	appInfo.pNext = nullptr;
@@ -65,7 +64,7 @@ static VkResult InitVulkan(const char* appName) {
 	createInfo.enabledExtensionCount = extensions.size();
 	createInfo.ppEnabledExtensionNames = extensions.data();
 
-	result = vkCreateInstance(&createInfo, nullptr, &instance);
+	result = vkCreateInstance(&createInfo, nullptr, instance);
 	if (result != VK_SUCCESS) {
 		return result;
 	}
@@ -97,7 +96,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	char windowTitle[TITLE_SIZE];
 	size_t size;
 	wcstombs_s(&size, windowTitle, TITLE_SIZE, szTitle, MAX_LOADSTRING - 1);
-	auto result = InitVulkan(windowTitle);
+	VkInstance instance;
+	auto result = InitVulkan(&instance, windowTitle);
 	if (result != VkResult::VK_SUCCESS) {
 		return FALSE;
 	}
@@ -115,6 +115,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 			DispatchMessage(&msg);
 		}
 	}
+
+	vkDestroyInstance(instance, nullptr);
 
 	return (int)msg.wParam;
 }
