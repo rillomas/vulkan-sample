@@ -18,6 +18,40 @@ BOOL                InitInstance(HINSTANCE, int);
 LRESULT CALLBACK    WndProc(HWND, UINT, WPARAM, LPARAM);
 INT_PTR CALLBACK    About(HWND, UINT, WPARAM, LPARAM);
 
+
+static VkResult InitVulkan(const char* appName) {
+	VkInstance instance;
+	VkApplicationInfo appInfo;
+	appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+	appInfo.pNext = nullptr;
+	appInfo.pApplicationName = appName;
+	appInfo.applicationVersion = VK_MAKE_VERSION(0, 0, 1);
+	appInfo.pEngineName = "MyEngine";
+	appInfo.engineVersion = VK_MAKE_VERSION(0, 0, 1);
+	appInfo.apiVersion = VK_API_VERSION_1_3;
+
+	std::vector<const char*> extensions = {
+		VK_KHR_SURFACE_EXTENSION_NAME,
+		VK_KHR_WIN32_SURFACE_EXTENSION_NAME,
+	};
+
+	VkInstanceCreateInfo createInfo;
+	createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+	createInfo.pNext = nullptr;
+	createInfo.pApplicationInfo = &appInfo;
+	createInfo.enabledLayerCount = 0;
+	createInfo.ppEnabledLayerNames = nullptr;
+	createInfo.enabledExtensionCount = extensions.size();
+	createInfo.ppEnabledExtensionNames = extensions.data();
+
+	auto result = vkCreateInstance(&createInfo, nullptr, &instance);
+	if (result != VkResult::VK_SUCCESS) {
+		return result;
+	}
+
+	return VkResult::VK_SUCCESS;
+}
+
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	_In_opt_ HINSTANCE hPrevInstance,
 	_In_ LPWSTR    lpCmdLine,
@@ -36,6 +70,14 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	// アプリケーション初期化の実行:
 	if (!InitInstance(hInstance, nCmdShow))
 	{
+		return FALSE;
+	}
+	constexpr size_t TITLE_SIZE = MAX_LOADSTRING * 2;
+	char windowTitle[TITLE_SIZE];
+	size_t size;
+	wcstombs_s(&size, windowTitle, TITLE_SIZE, szTitle, MAX_LOADSTRING - 1);
+	auto result = InitVulkan(windowTitle);
+	if (result != VkResult::VK_SUCCESS) {
 		return FALSE;
 	}
 
