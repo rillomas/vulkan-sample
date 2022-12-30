@@ -1,6 +1,7 @@
 ﻿// VulkanSample.cpp : アプリケーションのエントリ ポイントを定義します。
 //
 
+#include <iostream>
 #include "framework.h"
 #include "VulkanSample.h"
 #include <vulkan/vulkan.hpp>
@@ -18,8 +19,28 @@ BOOL                InitInstance(HINSTANCE, int);
 LRESULT CALLBACK    WndProc(HWND, UINT, WPARAM, LPARAM);
 INT_PTR CALLBACK    About(HWND, UINT, WPARAM, LPARAM);
 
+static VkResult EnumerateExtensions(std::vector<VkExtensionProperties>* extensionList) {
+	uint32_t extensionCount;
+	auto result = vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, nullptr);
+	if (result != VK_SUCCESS) {
+		return result;
+	}
+	extensionList->resize(extensionCount);
+	result = vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, extensionList->data());
+	return result;
+}
+
 
 static VkResult InitVulkan(const char* appName) {
+	std::vector<VkExtensionProperties> extensionList;
+	auto result = EnumerateExtensions(&extensionList);
+	if (result != VK_SUCCESS) {
+		return result;
+	}
+	for (const auto& ex : extensionList) {
+		std::cout << ex.extensionName << std::endl;
+	}
+
 	VkInstance instance;
 	VkApplicationInfo appInfo;
 	appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -44,12 +65,12 @@ static VkResult InitVulkan(const char* appName) {
 	createInfo.enabledExtensionCount = extensions.size();
 	createInfo.ppEnabledExtensionNames = extensions.data();
 
-	auto result = vkCreateInstance(&createInfo, nullptr, &instance);
-	if (result != VkResult::VK_SUCCESS) {
+	result = vkCreateInstance(&createInfo, nullptr, &instance);
+	if (result != VK_SUCCESS) {
 		return result;
 	}
 
-	return VkResult::VK_SUCCESS;
+	return VK_SUCCESS;
 }
 
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
