@@ -20,7 +20,7 @@ LRESULT CALLBACK    WndProc(HWND, UINT, WPARAM, LPARAM);
 INT_PTR CALLBACK    About(HWND, UINT, WPARAM, LPARAM);
 
 static vk::Instance CreateInstance(const char* appName) {
-	auto extensionList = vk::enumerateInstanceExtensionProperties(nullptr);
+	auto extensionList = vk::enumerateInstanceExtensionProperties();
 	for (const auto& ex : extensionList) {
 		std::cout << ex.extensionName << std::endl;
 	}
@@ -42,8 +42,23 @@ static vk::Instance CreateInstance(const char* appName) {
 	createInfo.sType = vk::StructureType::eInstanceCreateInfo;
 	createInfo.pNext = nullptr;
 	createInfo.pApplicationInfo = &appInfo;
-	createInfo.enabledLayerCount = 0;
-	createInfo.ppEnabledLayerNames = nullptr;
+	std::vector<const char*> layersInUse;
+#ifdef _DEBUG
+	std::vector<std::string> layerCandidate = {
+		"VK_LAYER_KHRONOS_validation"
+	};
+	// Check for debug layer and use it if available
+	auto layerList = vk::enumerateInstanceLayerProperties();
+	for (const auto& l : layerList) {
+		std::cout << l.layerName << std::endl;
+		if (std::find(layerCandidate.begin(), layerCandidate.end(), l.layerName) != layerCandidate.end()) {
+			// found target layer
+			layersInUse.push_back(l.layerName);
+		}
+	}
+#endif
+	createInfo.enabledLayerCount = layersInUse.size();
+	createInfo.ppEnabledLayerNames = layersInUse.data();
 	createInfo.enabledExtensionCount = extensions.size();
 	createInfo.ppEnabledExtensionNames = extensions.data();
 	return vk::createInstance(createInfo);
