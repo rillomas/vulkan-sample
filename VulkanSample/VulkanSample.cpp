@@ -19,30 +19,14 @@ BOOL                InitInstance(HINSTANCE, int);
 LRESULT CALLBACK    WndProc(HWND, UINT, WPARAM, LPARAM);
 INT_PTR CALLBACK    About(HWND, UINT, WPARAM, LPARAM);
 
-static VkResult EnumerateExtensions(std::vector<VkExtensionProperties>* extensionList) {
-	uint32_t extensionCount;
-	auto result = vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, nullptr);
-	if (result != VK_SUCCESS) {
-		return result;
-	}
-	extensionList->resize(extensionCount);
-	result = vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, extensionList->data());
-	return result;
-}
-
-
-static VkResult InitVulkan(VkInstance* instance, const char* appName) {
-	std::vector<VkExtensionProperties> extensionList;
-	auto result = EnumerateExtensions(&extensionList);
-	if (result != VK_SUCCESS) {
-		return result;
-	}
+static vk::Instance CreateInstance(const char* appName) {
+	auto extensionList = vk::enumerateInstanceExtensionProperties(nullptr);
 	for (const auto& ex : extensionList) {
 		std::cout << ex.extensionName << std::endl;
 	}
 
-	VkApplicationInfo appInfo;
-	appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+	vk::ApplicationInfo appInfo;
+	appInfo.sType = vk::StructureType::eApplicationInfo;
 	appInfo.pNext = nullptr;
 	appInfo.pApplicationName = appName;
 	appInfo.applicationVersion = VK_MAKE_VERSION(0, 0, 1);
@@ -54,22 +38,22 @@ static VkResult InitVulkan(VkInstance* instance, const char* appName) {
 		VK_KHR_SURFACE_EXTENSION_NAME,
 		VK_KHR_WIN32_SURFACE_EXTENSION_NAME,
 	};
-
-	VkInstanceCreateInfo createInfo;
-	createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+	vk::InstanceCreateInfo createInfo;
+	createInfo.sType = vk::StructureType::eInstanceCreateInfo;
 	createInfo.pNext = nullptr;
 	createInfo.pApplicationInfo = &appInfo;
 	createInfo.enabledLayerCount = 0;
 	createInfo.ppEnabledLayerNames = nullptr;
 	createInfo.enabledExtensionCount = extensions.size();
 	createInfo.ppEnabledExtensionNames = extensions.data();
+	return vk::createInstance(createInfo);
+}
 
-	result = vkCreateInstance(&createInfo, nullptr, instance);
-	if (result != VK_SUCCESS) {
-		return result;
-	}
-
-	return VK_SUCCESS;
+void CreateConsole() {
+	FILE* fp;
+	AllocConsole();
+	freopen_s(&fp, "CONOUT$", "w", stdout);
+	freopen_s(&fp, "CONOUT$", "w", stderr);
 }
 
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
@@ -80,7 +64,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	UNREFERENCED_PARAMETER(hPrevInstance);
 	UNREFERENCED_PARAMETER(lpCmdLine);
 
-	// TODO: ここにコードを挿入してください。
+	CreateConsole();
 
 	// グローバル文字列を初期化する
 	LoadStringW(hInstance, IDS_APP_TITLE, szTitle, MAX_LOADSTRING);
@@ -92,15 +76,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	{
 		return FALSE;
 	}
-	constexpr size_t TITLE_SIZE = MAX_LOADSTRING * 2;
+	constexpr size_t TITLE_SIZE = MAX_LOADSTRING * sizeof(WCHAR);
 	char windowTitle[TITLE_SIZE];
 	size_t size;
 	wcstombs_s(&size, windowTitle, TITLE_SIZE, szTitle, MAX_LOADSTRING - 1);
-	VkInstance instance;
-	auto result = InitVulkan(&instance, windowTitle);
-	if (result != VkResult::VK_SUCCESS) {
-		return FALSE;
-	}
+	auto instance = CreateInstance(windowTitle);
 
 	HACCEL hAccelTable = LoadAccelerators(hInstance, MAKEINTRESOURCE(IDC_VULKANSAMPLE));
 
@@ -115,8 +95,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 			DispatchMessage(&msg);
 		}
 	}
-
-	vkDestroyInstance(instance, nullptr);
+	instance.destroy();
 
 	return (int)msg.wParam;
 }
