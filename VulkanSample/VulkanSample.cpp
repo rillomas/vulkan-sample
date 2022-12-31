@@ -2,6 +2,8 @@
 //
 
 #include <iostream>
+#include <optional>
+#include <ranges>
 #include "framework.h"
 #include "VulkanSample.h"
 #include <vulkan/vulkan.hpp>
@@ -19,7 +21,24 @@ BOOL                InitInstance(HINSTANCE, int);
 LRESULT CALLBACK    WndProc(HWND, UINT, WPARAM, LPARAM);
 INT_PTR CALLBACK    About(HWND, UINT, WPARAM, LPARAM);
 
-static vk::Instance CreateInstance(const char* appName) {
+static std::vector <std::string> GetInstanceLayers(std::vector<std::string>& layerCandidate) {
+	std::vector<std::string> layersInUse;
+	if (layerCandidate.empty()) {
+		return layersInUse;
+	}
+	// Check for debug layer and use it if available
+	auto layerList = vk::enumerateInstanceLayerProperties();
+	for (const auto& l : layerList) {
+		std::cout << l.layerName << std::endl;
+		if (std::find(layerCandidate.begin(), layerCandidate.end(), l.layerName) != layerCandidate.end()) {
+			// found target layer
+			layersInUse.push_back(l.layerName);
+		}
+	}
+	return layersInUse;
+}
+
+static vk::Instance CreateInstance(const char* appName, std::vector<const char*>& layers, std::vector<const char*> extensions) {
 	auto extensionList = vk::enumerateInstanceExtensionProperties();
 	for (const auto& ex : extensionList) {
 		std::cout << ex.extensionName << std::endl;
@@ -34,31 +53,12 @@ static vk::Instance CreateInstance(const char* appName) {
 	appInfo.engineVersion = VK_MAKE_VERSION(0, 0, 1);
 	appInfo.apiVersion = VK_API_VERSION_1_3;
 
-	std::vector<const char*> extensions = {
-		VK_KHR_SURFACE_EXTENSION_NAME,
-		VK_KHR_WIN32_SURFACE_EXTENSION_NAME,
-	};
 	vk::InstanceCreateInfo createInfo;
 	createInfo.sType = vk::StructureType::eInstanceCreateInfo;
 	createInfo.pNext = nullptr;
 	createInfo.pApplicationInfo = &appInfo;
-	std::vector<const char*> layersInUse;
-#ifdef _DEBUG
-	std::vector<std::string> layerCandidate = {
-		"VK_LAYER_KHRONOS_validation"
-	};
-	// Check for debug layer and use it if available
-	auto layerList = vk::enumerateInstanceLayerProperties();
-	for (const auto& l : layerList) {
-		std::cout << l.layerName << std::endl;
-		if (std::find(layerCandidate.begin(), layerCandidate.end(), l.layerName) != layerCandidate.end()) {
-			// found target layer
-			layersInUse.push_back(l.layerName);
-		}
-	}
-#endif
-	createInfo.enabledLayerCount = layersInUse.size();
-	createInfo.ppEnabledLayerNames = layersInUse.data();
+	createInfo.enabledLayerCount = layers.size();
+	createInfo.ppEnabledLayerNames = layers.data();
 	createInfo.enabledExtensionCount = extensions.size();
 	createInfo.ppEnabledExtensionNames = extensions.data();
 	return vk::createInstance(createInfo);
@@ -69,6 +69,36 @@ void CreateConsole() {
 	AllocConsole();
 	freopen_s(&fp, "CONOUT$", "w", stdout);
 	freopen_s(&fp, "CONOUT$", "w", stderr);
+}
+
+struct DeviceAndIndex {
+	vk::PhysicalDevice device;
+	uint32_t index;
+};
+
+std::optional<DeviceAndIndex> GetSufficientDevice(vk::Instance& instance) {
+	auto devices = instance.enumeratePhysicalDevices();
+	if (devices.size() <= 0) {
+		throw std::runtime_error("Cannot find physical device");
+	}
+	DeviceAndIndex dai;
+	vk::PhysicalDevice targetDevice;
+	for (const auto& d : devices) {
+		auto qprops = d.getQueueFamilyProperties();
+		uint32_t index = 0;
+		for (const auto& qp : qprops) {
+			// A queue must support graphics, compute and transfer
+			if ((qp.queueFlags & vk::QueueFlagBits::eGraphics) &&
+				(qp.queueFlags & vk::QueueFlagBits::eCompute) &&
+				(qp.queueFlags & vk::QueueFlagBits::eTransfer)) {
+				dai.device = d;
+				dai.index = index;
+				return dai;
+			}
+			index++;
+		}
+	}
+	return std::nullopt;
 }
 
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
@@ -95,8 +125,41 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	char windowTitle[TITLE_SIZE];
 	size_t size;
 	wcstombs_s(&size, windowTitle, TITLE_SIZE, szTitle, MAX_LOADSTRING - 1);
-	auto instance = CreateInstance(windowTitle);
 
+	std::vector<std::string> layerCandidate;
+#ifdef _DEBUG
+	layerCandidate.push_back("VK_LAYER_KHRONOS_validation");
+#endif
+	auto layers = GetInstanceLayers(layerCandidate);
+	std::vector<const char*> actualLayers;
+	actualLayers.reserve(layers.size());
+	for (auto& c : layers) {
+		actualLayers.push_back(c.c_str());
+	}
+	std::vector<const char*> extensions = {
+		VK_KHR_SURFACE_EXTENSION_NAME,
+		VK_KHR_WIN32_SURFACE_EXTENSION_NAME,
+	};
+	auto instance = CreateInstance(windowTitle, actualLayers, extensions);
+	uint32_t index = 0;
+	auto targetDevice = GetSufficientDevice(instance);
+	if (!targetDevice.has_value()) {
+		std::cerr << "Could not find sufficient device" << std::endl;
+		return false;
+	}
+	vk::DeviceQueueCreateInfo qinfo;
+	qinfo.sType = vk::StructureType::eDeviceQueueCreateInfo;
+	qinfo.queueFamilyIndex = targetDevice->index;
+	qinfo.queueCount = 1;
+	vk::PhysicalDeviceFeatures deviceFeature;
+	vk::DeviceCreateInfo info;
+	info.sType = vk::StructureType::eDeviceCreateInfo;
+	info.pQueueCreateInfos = &qinfo;
+	info.queueCreateInfoCount = 1;
+	info.pEnabledFeatures = &deviceFeature;
+	info.enabledLayerCount = actualLayers.size();
+	info.ppEnabledLayerNames = actualLayers.data();
+	auto device = targetDevice->device.createDevice(info);
 	HACCEL hAccelTable = LoadAccelerators(hInstance, MAKEINTRESOURCE(IDC_VULKANSAMPLE));
 
 	MSG msg;
