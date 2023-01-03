@@ -4,6 +4,7 @@
 #include <iostream>
 #include <optional>
 #include <ranges>
+#include <set>
 #include "framework.h"
 #include "VulkanSample.h"
 #include <vulkan/vulkan.hpp>
@@ -57,9 +58,9 @@ static vk::Instance CreateInstance(const char* appName, std::vector<const char*>
 	createInfo.sType = vk::StructureType::eInstanceCreateInfo;
 	createInfo.pNext = nullptr;
 	createInfo.pApplicationInfo = &appInfo;
-	createInfo.enabledLayerCount = layers.size();
+	createInfo.enabledLayerCount = (uint32_t)layers.size();
 	createInfo.ppEnabledLayerNames = layers.data();
-	createInfo.enabledExtensionCount = extensions.size();
+	createInfo.enabledExtensionCount = (uint32_t)extensions.size();
 	createInfo.ppEnabledExtensionNames = extensions.data();
 	return vk::createInstance(createInfo);
 }
@@ -76,7 +77,7 @@ struct DeviceAndIndex {
 	uint32_t graphicsIndex;
 	uint32_t presentIndex;
 
-	std::vector<vk::DeviceQueueCreateInfo> GetQueueCreateInfoList(float* priority) {
+	std::vector<vk::DeviceQueueCreateInfo> GetQueueCreateInfoList(float* priority) const {
 		std::vector<vk::DeviceQueueCreateInfo> qInfoList;
 		vk::DeviceQueueCreateInfo qinfo;
 		qinfo.sType = vk::StructureType::eDeviceQueueCreateInfo;
@@ -93,12 +94,23 @@ struct DeviceAndIndex {
 	}
 };
 
-std::optional<DeviceAndIndex> GetSufficientDevice(vk::Instance& instance, vk::SurfaceKHR& surface) {
+std::optional<DeviceAndIndex> GetSufficientDevice(vk::Instance& instance, vk::SurfaceKHR& surface, const std::vector<const char*>& requiredExtensions) {
 	auto devices = instance.enumeratePhysicalDevices();
 	if (devices.size() <= 0) {
 		throw std::runtime_error("Cannot find physical device");
 	}
 	for (const auto& d : devices) {
+		// Check if all required extensions are supported on this device
+		auto eprops = d.enumerateDeviceExtensionProperties();
+		std::set<std::string> required(requiredExtensions.begin(), requiredExtensions.end());
+		for (const auto& e : eprops) {
+			required.erase(e.extensionName);
+		}
+		if (!required.empty()) {
+			// Device couldn't fulfill all required extensions so we skip and go next
+			continue;
+		}
+
 		auto qprops = d.getQueueFamilyProperties();
 		std::optional<uint32_t> graphicsIndex;
 		std::optional<uint32_t> presentIndex;
@@ -180,7 +192,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	win32info.hinstance = hInstance;
 	auto surface = instance.createWin32SurfaceKHR(win32info);
 
-	auto targetDevice = GetSufficientDevice(instance, surface);
+	std::vector<const char*> deviceExtensions = {
+		VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+	};
+	auto targetDevice = GetSufficientDevice(instance, surface, deviceExtensions);
 	if (!targetDevice.has_value()) {
 		std::cerr << "Could not find sufficient device" << std::endl;
 		return false;
@@ -192,10 +207,12 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	vk::DeviceCreateInfo info;
 	info.sType = vk::StructureType::eDeviceCreateInfo;
 	info.pQueueCreateInfos = qInfoList.data();
-	info.queueCreateInfoCount = qInfoList.size();
+	info.queueCreateInfoCount = (uint32_t)qInfoList.size();
 	info.pEnabledFeatures = &deviceFeature;
-	info.enabledLayerCount = actualLayers.size();
+	info.enabledLayerCount = (uint32_t)actualLayers.size();
 	info.ppEnabledLayerNames = actualLayers.data();
+	info.enabledExtensionCount = (uint32_t)deviceExtensions.size();
+	info.ppEnabledExtensionNames = deviceExtensions.data();
 	auto device = targetDevice->device.createDevice(info);
 	auto presentQueue = device.getQueue(targetDevice->presentIndex, 0);
 	HACCEL hAccelTable = LoadAccelerators(hInstance, MAKEINTRESOURCE(IDC_VULKANSAMPLE));
