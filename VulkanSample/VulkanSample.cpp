@@ -17,7 +17,7 @@ WCHAR szWindowClass[MAX_LOADSTRING];            // メイン ウィンドウ ク
 
 // このコード モジュールに含まれる関数の宣言を転送します:
 ATOM                MyRegisterClass(HINSTANCE hInstance);
-BOOL                InitInstance(HINSTANCE, int);
+std::optional<HWND> InitInstance(HINSTANCE, int);
 LRESULT CALLBACK    WndProc(HWND, UINT, WPARAM, LPARAM);
 INT_PTR CALLBACK    About(HWND, UINT, WPARAM, LPARAM);
 
@@ -73,26 +73,40 @@ void CreateConsole() {
 
 struct DeviceAndIndex {
 	vk::PhysicalDevice device;
-	uint32_t index;
+	uint32_t graphicsIndex;
+	uint32_t presentIndex;
 };
 
-std::optional<DeviceAndIndex> GetSufficientDevice(vk::Instance& instance) {
+std::optional<DeviceAndIndex> GetSufficientDevice(vk::Instance& instance, vk::SurfaceKHR& surface) {
 	auto devices = instance.enumeratePhysicalDevices();
 	if (devices.size() <= 0) {
 		throw std::runtime_error("Cannot find physical device");
 	}
-	DeviceAndIndex dai;
-	vk::PhysicalDevice targetDevice;
 	for (const auto& d : devices) {
 		auto qprops = d.getQueueFamilyProperties();
+		std::optional<uint32_t> graphicsIndex;
+		std::optional<uint32_t> presentIndex;
 		uint32_t index = 0;
 		for (const auto& qp : qprops) {
-			// A queue must support graphics, compute and transfer
-			if ((qp.queueFlags & vk::QueueFlagBits::eGraphics) &&
+			// queue must support graphics, compute and transfer
+			auto graphicsCapable = (qp.queueFlags & vk::QueueFlagBits::eGraphics) &&
 				(qp.queueFlags & vk::QueueFlagBits::eCompute) &&
-				(qp.queueFlags & vk::QueueFlagBits::eTransfer)) {
-				dai.device = d;
-				dai.index = index;
+				(qp.queueFlags & vk::QueueFlagBits::eTransfer);
+			if (graphicsCapable) {
+				graphicsIndex = index;
+			}
+			// queue must support presentation
+			if (d.getSurfaceSupportKHR(index, surface)) {
+				presentIndex = index;
+			}
+
+			// If we find both queues from a single device we accept it
+			if (graphicsIndex.has_value() && presentIndex.has_value()) {
+				DeviceAndIndex dai = {
+					d,
+					graphicsIndex.value(),
+					presentIndex.value()
+				};
 				return dai;
 			}
 			index++;
@@ -117,8 +131,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	MyRegisterClass(hInstance);
 
 	// アプリケーション初期化の実行:
-	if (!InitInstance(hInstance, nCmdShow))
+	auto hwnd = InitInstance(hInstance, nCmdShow);
+	if (!hwnd.has_value())
 	{
+		std::cerr << "Failed to create window" << std::endl;
 		return FALSE;
 	}
 	constexpr size_t TITLE_SIZE = MAX_LOADSTRING * sizeof(WCHAR);
@@ -141,15 +157,22 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		VK_KHR_WIN32_SURFACE_EXTENSION_NAME,
 	};
 	auto instance = CreateInstance(windowTitle, actualLayers, extensions);
+
+	vk::Win32SurfaceCreateInfoKHR win32info;
+	win32info.sType = vk::StructureType::eWin32SurfaceCreateInfoKHR;
+	win32info.hwnd = hwnd.value();
+	win32info.hinstance = hInstance;
+	auto surface = instance.createWin32SurfaceKHR(win32info);
+
 	uint32_t index = 0;
-	auto targetDevice = GetSufficientDevice(instance);
+	auto targetDevice = GetSufficientDevice(instance, surface);
 	if (!targetDevice.has_value()) {
 		std::cerr << "Could not find sufficient device" << std::endl;
 		return false;
 	}
 	vk::DeviceQueueCreateInfo qinfo;
 	qinfo.sType = vk::StructureType::eDeviceQueueCreateInfo;
-	qinfo.queueFamilyIndex = targetDevice->index;
+	qinfo.queueFamilyIndex = targetDevice->graphicsIndex;
 	qinfo.queueCount = 1;
 	vk::PhysicalDeviceFeatures deviceFeature;
 	vk::DeviceCreateInfo info;
@@ -173,6 +196,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 			DispatchMessage(&msg);
 		}
 	}
+	device.destroy();
+	instance.destroySurfaceKHR(surface);
 	instance.destroy();
 
 	return (int)msg.wParam;
@@ -216,7 +241,7 @@ ATOM MyRegisterClass(HINSTANCE hInstance)
 //        この関数で、グローバル変数でインスタンス ハンドルを保存し、
 //        メイン プログラム ウィンドウを作成および表示します。
 //
-BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
+std::optional<HWND> InitInstance(HINSTANCE hInstance, int nCmdShow)
 {
 	hInst = hInstance; // グローバル変数にインスタンス ハンドルを格納する
 
@@ -225,13 +250,13 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 
 	if (!hWnd)
 	{
-		return FALSE;
+		return std::nullopt;
 	}
 
 	ShowWindow(hWnd, nCmdShow);
 	UpdateWindow(hWnd);
 
-	return TRUE;
+	return hWnd;
 }
 
 //
