@@ -72,6 +72,16 @@ void CreateConsole() {
 	freopen_s(&fp, "CONOUT$", "w", stderr);
 }
 
+struct SwapChainSupportDetails {
+	vk::SurfaceCapabilitiesKHR capabilities;
+	std::vector<vk::SurfaceFormatKHR> formats;
+	std::vector<vk::PresentModeKHR> presentModes;
+
+	bool SwapChainAdequate() const {
+		return !formats.empty() && !presentModes.empty();
+	}
+};
+
 struct DeviceAndIndex {
 	vk::PhysicalDevice device;
 	uint32_t graphicsIndex;
@@ -91,6 +101,15 @@ struct DeviceAndIndex {
 			qInfoList.push_back(qinfo);
 		}
 		return qInfoList;
+	}
+
+	SwapChainSupportDetails GetSwapChainSupportDetails(vk::SurfaceKHR& surface) const {
+		SwapChainSupportDetails details = {
+			device.getSurfaceCapabilitiesKHR(surface),
+			device.getSurfaceFormatsKHR(surface),
+			device.getSurfacePresentModesKHR(surface)
+		};
+		return details;
 	}
 };
 
@@ -203,6 +222,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
 	float priority = 1.0f;
 	auto qInfoList = targetDevice->GetQueueCreateInfoList(&priority);
+	auto details = targetDevice->GetSwapChainSupportDetails(surface);
+	if (!details.SwapChainAdequate()) {
+		std::cerr << "Could not find sufficient swap chain" << std::endl;
+		return false;
+	}
 	vk::PhysicalDeviceFeatures deviceFeature;
 	vk::DeviceCreateInfo info;
 	info.sType = vk::StructureType::eDeviceCreateInfo;
