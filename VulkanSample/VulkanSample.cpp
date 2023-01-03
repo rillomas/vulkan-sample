@@ -75,6 +75,22 @@ struct DeviceAndIndex {
 	vk::PhysicalDevice device;
 	uint32_t graphicsIndex;
 	uint32_t presentIndex;
+
+	std::vector<vk::DeviceQueueCreateInfo> GetQueueCreateInfoList(float* priority) {
+		std::vector<vk::DeviceQueueCreateInfo> qInfoList;
+		vk::DeviceQueueCreateInfo qinfo;
+		qinfo.sType = vk::StructureType::eDeviceQueueCreateInfo;
+		qinfo.queueFamilyIndex = graphicsIndex;
+		qinfo.queueCount = 1;
+		qinfo.pQueuePriorities = priority;
+		qInfoList.push_back(qinfo);
+		if (graphicsIndex != presentIndex) {
+			// We add two queue info only if they have different indices
+			qinfo.queueFamilyIndex = presentIndex;
+			qInfoList.push_back(qinfo);
+		}
+		return qInfoList;
+	}
 };
 
 std::optional<DeviceAndIndex> GetSufficientDevice(vk::Instance& instance, vk::SurfaceKHR& surface) {
@@ -164,25 +180,24 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	win32info.hinstance = hInstance;
 	auto surface = instance.createWin32SurfaceKHR(win32info);
 
-	uint32_t index = 0;
 	auto targetDevice = GetSufficientDevice(instance, surface);
 	if (!targetDevice.has_value()) {
 		std::cerr << "Could not find sufficient device" << std::endl;
 		return false;
 	}
-	vk::DeviceQueueCreateInfo qinfo;
-	qinfo.sType = vk::StructureType::eDeviceQueueCreateInfo;
-	qinfo.queueFamilyIndex = targetDevice->graphicsIndex;
-	qinfo.queueCount = 1;
+
+	float priority = 1.0f;
+	auto qInfoList = targetDevice->GetQueueCreateInfoList(&priority);
 	vk::PhysicalDeviceFeatures deviceFeature;
 	vk::DeviceCreateInfo info;
 	info.sType = vk::StructureType::eDeviceCreateInfo;
-	info.pQueueCreateInfos = &qinfo;
-	info.queueCreateInfoCount = 1;
+	info.pQueueCreateInfos = qInfoList.data();
+	info.queueCreateInfoCount = qInfoList.size();
 	info.pEnabledFeatures = &deviceFeature;
 	info.enabledLayerCount = actualLayers.size();
 	info.ppEnabledLayerNames = actualLayers.data();
 	auto device = targetDevice->device.createDevice(info);
+	auto presentQueue = device.getQueue(targetDevice->presentIndex, 0);
 	HACCEL hAccelTable = LoadAccelerators(hInstance, MAKEINTRESOURCE(IDC_VULKANSAMPLE));
 
 	MSG msg;
