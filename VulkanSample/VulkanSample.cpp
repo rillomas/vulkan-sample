@@ -72,15 +72,33 @@ void CreateConsole() {
 	freopen_s(&fp, "CONOUT$", "w", stderr);
 }
 
+template<class T>
+static bool contains(std::vector<T> list, T target) {
+	return std::find(list.begin(), list.end(), target) != list.end();
+}
+
 struct SwapChainSupportDetails {
 	vk::SurfaceCapabilitiesKHR capabilities;
 	std::vector<vk::SurfaceFormatKHR> formats;
 	std::vector<vk::PresentModeKHR> presentModes;
 
-	bool SwapChainAdequate() const {
-		return !formats.empty() && !presentModes.empty();
+	bool SwapChainAdequate(vk::SurfaceFormatKHR targetFormat, vk::PresentModeKHR targetMode) const {
+		return contains(formats, targetFormat) && contains(presentModes, targetMode);
 	}
+
 };
+
+vk::Extent2D ChooseSwapExtent(vk::SurfaceCapabilitiesKHR capabilities) {
+	return capabilities.currentExtent;
+}
+
+uint32_t ChooseImageCount(vk::SurfaceCapabilitiesKHR capabilities) {
+	auto imgCount = capabilities.minImageCount + 1;
+	if (capabilities.maxImageCount > 0 && imgCount > capabilities.maxImageCount) {
+		imgCount = capabilities.maxImageCount;
+	}
+	return imgCount;
+}
 
 struct DeviceAndIndex {
 	vk::PhysicalDevice device;
@@ -223,7 +241,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	float priority = 1.0f;
 	auto qInfoList = targetDevice->GetQueueCreateInfoList(&priority);
 	auto details = targetDevice->GetSwapChainSupportDetails(surface);
-	if (!details.SwapChainAdequate()) {
+	auto targetFormat = vk::SurfaceFormatKHR(vk::Format::eB8G8R8A8Srgb, vk::ColorSpaceKHR::eSrgbNonlinear);
+	auto targetMode = vk::PresentModeKHR::eFifo;
+	if (!details.SwapChainAdequate(targetFormat, targetMode)) {
 		std::cerr << "Could not find sufficient swap chain" << std::endl;
 		return false;
 	}
@@ -239,6 +259,35 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	info.ppEnabledExtensionNames = deviceExtensions.data();
 	auto device = targetDevice->device.createDevice(info);
 	auto presentQueue = device.getQueue(targetDevice->presentIndex, 0);
+	auto extent = ChooseSwapExtent(details.capabilities);
+
+	vk::SwapchainCreateInfoKHR chainInfo;
+	chainInfo.sType = vk::StructureType::eSwapchainCreateInfoKHR;
+	chainInfo.surface = surface;
+	chainInfo.minImageCount = ChooseImageCount(details.capabilities);
+	chainInfo.imageFormat = targetFormat.format;
+	chainInfo.imageColorSpace = targetFormat.colorSpace;
+	chainInfo.imageExtent = extent;
+	chainInfo.imageArrayLayers = 1;
+	chainInfo.imageUsage = vk::ImageUsageFlagBits::eColorAttachment;
+	std::vector<uint32_t> queueFamilyIndices = { targetDevice->graphicsIndex, targetDevice->presentIndex };
+	if (targetDevice->graphicsIndex == targetDevice->presentIndex) {
+		chainInfo.imageSharingMode = vk::SharingMode::eExclusive;
+		chainInfo.queueFamilyIndexCount = 0;
+		chainInfo.pQueueFamilyIndices = nullptr;
+	}
+	else {
+		chainInfo.imageSharingMode = vk::SharingMode::eConcurrent;
+		chainInfo.queueFamilyIndexCount = queueFamilyIndices.size();
+		chainInfo.pQueueFamilyIndices = queueFamilyIndices.data();
+	}
+	chainInfo.preTransform = details.capabilities.currentTransform;
+	chainInfo.compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque;
+	chainInfo.presentMode = targetMode;
+	chainInfo.clipped = true;
+	chainInfo.oldSwapchain = nullptr;
+	auto swapChain = device.createSwapchainKHR(chainInfo);
+
 	HACCEL hAccelTable = LoadAccelerators(hInstance, MAKEINTRESOURCE(IDC_VULKANSAMPLE));
 
 	MSG msg;
@@ -252,6 +301,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 			DispatchMessage(&msg);
 		}
 	}
+	device.destroySwapchainKHR(swapChain);
 	device.destroy();
 	instance.destroySurfaceKHR(surface);
 	instance.destroy();
