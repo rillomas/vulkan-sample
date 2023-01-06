@@ -5,6 +5,8 @@
 #include <optional>
 #include <ranges>
 #include <set>
+#include <filesystem>
+#include <fstream>
 #include "framework.h"
 #include "VulkanSample.h"
 #include <vulkan/vulkan.hpp>
@@ -179,6 +181,23 @@ std::optional<DeviceAndIndex> GetSufficientDevice(vk::Instance& instance, vk::Su
 	}
 	return std::nullopt;
 }
+std::vector<uint8_t> ReadFile(const std::filesystem::path& path) {
+	std::ifstream file(path.string(), std::ios::ate | std::ios::binary);
+	auto size = file.tellg();
+	std::vector<uint8_t> buffer(size);
+	file.seekg(0);
+	file.read((char*)buffer.data(), size);
+	file.close();
+	return buffer;
+}
+
+vk::ShaderModule CreateShaderModule(vk::Device& device, const std::vector<uint8_t>& code) {
+	vk::ShaderModuleCreateInfo shaderInfo;
+	shaderInfo.sType = vk::StructureType::eShaderModuleCreateInfo;
+	shaderInfo.codeSize = (uint32_t)code.size();
+	shaderInfo.pCode = reinterpret_cast<const uint32_t*>(code.data());
+	return device.createShaderModule(shaderInfo);
+}
 
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	_In_opt_ HINSTANCE hPrevInstance,
@@ -278,7 +297,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	}
 	else {
 		chainInfo.imageSharingMode = vk::SharingMode::eConcurrent;
-		chainInfo.queueFamilyIndexCount = queueFamilyIndices.size();
+		chainInfo.queueFamilyIndexCount = (uint32_t)queueFamilyIndices.size();
 		chainInfo.pQueueFamilyIndices = queueFamilyIndices.data();
 	}
 	chainInfo.preTransform = details.capabilities.currentTransform;
@@ -286,7 +305,35 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	chainInfo.presentMode = targetMode;
 	chainInfo.clipped = true;
 	chainInfo.oldSwapchain = nullptr;
-	auto swapChain = device.createSwapchainKHR(chainInfo);
+	auto swapchain = device.createSwapchainKHR(chainInfo);
+
+	auto swapchainImages = device.getSwapchainImagesKHR(swapchain);
+	std::vector<vk::ImageView> imageViews(swapchainImages.size());
+	for (size_t i = 0; i < swapchainImages.size(); i++) {
+		vk::ImageViewCreateInfo ci;
+		ci.sType = vk::StructureType::eImageViewCreateInfo;
+		ci.image = swapchainImages[i];
+		ci.viewType = vk::ImageViewType::e2D;
+		ci.format = targetFormat.format;
+		ci.components.r = vk::ComponentSwizzle::eIdentity;
+		ci.components.g = vk::ComponentSwizzle::eIdentity;
+		ci.components.b = vk::ComponentSwizzle::eIdentity;
+		ci.components.a = vk::ComponentSwizzle::eIdentity;
+		ci.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+		ci.subresourceRange.baseMipLevel = 0;
+		ci.subresourceRange.levelCount = 1;
+		ci.subresourceRange.baseArrayLayer = 0;
+		ci.subresourceRange.layerCount = 1;
+		imageViews[i] = device.createImageView(ci);
+	}
+
+	// Create shaders
+	auto fragmentCode = ::ReadFile("fragment.spv");
+	auto vertexCode = ::ReadFile("vertex.spv");
+
+	auto fragment = CreateShaderModule(device, fragmentCode);
+	auto vertex = CreateShaderModule(device, vertexCode);
+
 
 	HACCEL hAccelTable = LoadAccelerators(hInstance, MAKEINTRESOURCE(IDC_VULKANSAMPLE));
 
@@ -301,7 +348,12 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 			DispatchMessage(&msg);
 		}
 	}
-	device.destroySwapchainKHR(swapChain);
+	device.destroyShaderModule(fragment);
+	device.destroyShaderModule(vertex);
+	for (auto& iv : imageViews) {
+		device.destroyImageView(iv);
+	}
+	device.destroySwapchainKHR(swapchain);
 	device.destroy();
 	instance.destroySurfaceKHR(surface);
 	instance.destroy();
