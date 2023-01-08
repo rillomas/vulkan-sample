@@ -48,8 +48,6 @@ static vk::Instance CreateInstance(const char* appName, std::vector<const char*>
 	}
 
 	vk::ApplicationInfo appInfo;
-	appInfo.sType = vk::StructureType::eApplicationInfo;
-	appInfo.pNext = nullptr;
 	appInfo.pApplicationName = appName;
 	appInfo.applicationVersion = VK_MAKE_VERSION(0, 0, 1);
 	appInfo.pEngineName = "MyEngine";
@@ -57,8 +55,6 @@ static vk::Instance CreateInstance(const char* appName, std::vector<const char*>
 	appInfo.apiVersion = VK_API_VERSION_1_3;
 
 	vk::InstanceCreateInfo createInfo;
-	createInfo.sType = vk::StructureType::eInstanceCreateInfo;
-	createInfo.pNext = nullptr;
 	createInfo.pApplicationInfo = &appInfo;
 	createInfo.enabledLayerCount = (uint32_t)layers.size();
 	createInfo.ppEnabledLayerNames = layers.data();
@@ -110,7 +106,6 @@ struct DeviceAndIndex {
 	std::vector<vk::DeviceQueueCreateInfo> GetQueueCreateInfoList(float* priority) const {
 		std::vector<vk::DeviceQueueCreateInfo> qInfoList;
 		vk::DeviceQueueCreateInfo qinfo;
-		qinfo.sType = vk::StructureType::eDeviceQueueCreateInfo;
 		qinfo.queueFamilyIndex = graphicsIndex;
 		qinfo.queueCount = 1;
 		qinfo.pQueuePriorities = priority;
@@ -193,7 +188,6 @@ std::vector<uint8_t> ReadFile(const std::filesystem::path& path) {
 
 vk::ShaderModule CreateShaderModule(vk::Device& device, const std::vector<uint8_t>& code) {
 	vk::ShaderModuleCreateInfo shaderInfo;
-	shaderInfo.sType = vk::StructureType::eShaderModuleCreateInfo;
 	shaderInfo.codeSize = (uint32_t)code.size();
 	shaderInfo.pCode = reinterpret_cast<const uint32_t*>(code.data());
 	return device.createShaderModule(shaderInfo);
@@ -243,7 +237,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	auto instance = CreateInstance(windowTitle, actualLayers, extensions);
 
 	vk::Win32SurfaceCreateInfoKHR win32info;
-	win32info.sType = vk::StructureType::eWin32SurfaceCreateInfoKHR;
 	win32info.hwnd = hwnd.value();
 	win32info.hinstance = hInstance;
 	auto surface = instance.createWin32SurfaceKHR(win32info);
@@ -268,7 +261,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	}
 	vk::PhysicalDeviceFeatures deviceFeature;
 	vk::DeviceCreateInfo info;
-	info.sType = vk::StructureType::eDeviceCreateInfo;
 	info.pQueueCreateInfos = qInfoList.data();
 	info.queueCreateInfoCount = (uint32_t)qInfoList.size();
 	info.pEnabledFeatures = &deviceFeature;
@@ -281,7 +273,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	auto extent = ChooseSwapExtent(details.capabilities);
 
 	vk::SwapchainCreateInfoKHR chainInfo;
-	chainInfo.sType = vk::StructureType::eSwapchainCreateInfoKHR;
 	chainInfo.surface = surface;
 	chainInfo.minImageCount = ChooseImageCount(details.capabilities);
 	chainInfo.imageFormat = targetFormat.format;
@@ -311,7 +302,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	std::vector<vk::ImageView> imageViews(swapchainImages.size());
 	for (size_t i = 0; i < swapchainImages.size(); i++) {
 		vk::ImageViewCreateInfo ci;
-		ci.sType = vk::StructureType::eImageViewCreateInfo;
 		ci.image = swapchainImages[i];
 		ci.viewType = vk::ImageViewType::e2D;
 		ci.format = targetFormat.format;
@@ -333,6 +323,20 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
 	auto fragment = CreateShaderModule(device, fragmentCode);
 	auto vertex = CreateShaderModule(device, vertexCode);
+
+	vk::PipelineShaderStageCreateInfo vertShaderStageInfo;
+	vertShaderStageInfo.stage = vk::ShaderStageFlagBits::eVertex;
+	vertShaderStageInfo.module = vertex;
+	vertShaderStageInfo.pName = "main";
+
+	vk::PipelineShaderStageCreateInfo fragShaderStageInfo;
+	fragShaderStageInfo.stage = vk::ShaderStageFlagBits::eFragment;
+	fragShaderStageInfo.module = fragment;
+	fragShaderStageInfo.pName = "main";
+
+	vk::PipelineShaderStageCreateInfo stages[] = { vertShaderStageInfo, fragShaderStageInfo };
+
+
 
 
 	HACCEL hAccelTable = LoadAccelerators(hInstance, MAKEINTRESOURCE(IDC_VULKANSAMPLE));
