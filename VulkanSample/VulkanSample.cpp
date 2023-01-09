@@ -336,6 +336,49 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
 	vk::PipelineShaderStageCreateInfo stages[] = { vertShaderStageInfo, fragShaderStageInfo };
 
+	vk::PipelineVertexInputStateCreateInfo vertexInputInfo;
+	vertexInputInfo.vertexBindingDescriptionCount = 0;
+	vertexInputInfo.vertexAttributeDescriptionCount = 0;
+
+	vk::PipelineInputAssemblyStateCreateInfo inputAssembly;
+	inputAssembly.topology = vk::PrimitiveTopology::eTriangleList;
+	inputAssembly.primitiveRestartEnable = false;
+
+	vk::Viewport viewport(0.0f, 0.0f, (float)extent.width, (float)extent.height, 0.0f, 1.0f);
+	vk::Rect2D scissor(vk::Offset2D(0, 0), extent);
+	std::vector<vk::DynamicState> dynamicStates = {
+		vk::DynamicState::eViewport,
+		vk::DynamicState::eScissor,
+	};
+	vk::PipelineDynamicStateCreateInfo dynamicState;
+	dynamicState.dynamicStateCount = (uint32_t)dynamicStates.size();
+	dynamicState.pDynamicStates = dynamicStates.data();
+	vk::PipelineViewportStateCreateInfo viewportState;
+	viewportState.viewportCount = 1;
+	viewportState.pViewports = &viewport;
+	viewportState.scissorCount = 1;
+	viewportState.pScissors = &scissor;
+
+	vk::PipelineRasterizationStateCreateInfo rasterInfo;
+	rasterInfo.depthClampEnable = false;
+	rasterInfo.rasterizerDiscardEnable = false;
+	rasterInfo.polygonMode = vk::PolygonMode::eFill;
+	rasterInfo.lineWidth = 1.0f;
+	rasterInfo.cullMode = vk::CullModeFlagBits::eBack;
+	rasterInfo.frontFace = vk::FrontFace::eClockwise;
+	rasterInfo.depthBiasClamp = false;
+
+	vk::PipelineMultisampleStateCreateInfo multisample;
+	multisample.sampleShadingEnable = false;
+	multisample.rasterizationSamples = vk::SampleCountFlagBits::e1;
+
+	vk::PipelineColorBlendAttachmentState colorblend;
+	colorblend.colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA;
+	colorblend.blendEnable = false;
+
+	vk::PipelineLayoutCreateInfo pipelineLayoutInfo;
+	auto pipelineLayout = device.createPipelineLayout(pipelineLayoutInfo);
+
 
 
 
