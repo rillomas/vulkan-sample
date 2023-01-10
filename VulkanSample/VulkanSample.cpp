@@ -376,6 +376,12 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	colorblend.colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA;
 	colorblend.blendEnable = false;
 
+	vk::PipelineColorBlendStateCreateInfo colorblendInfo;
+	colorblendInfo.logicOp = vk::LogicOp::eCopy;
+	colorblendInfo.logicOpEnable = false;
+	colorblendInfo.attachmentCount = 1;
+	colorblendInfo.pAttachments = &colorblend;
+
 	vk::PipelineLayoutCreateInfo pipelineLayoutInfo;
 	auto pipelineLayout = device.createPipelineLayout(pipelineLayoutInfo);
 
@@ -405,6 +411,27 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	renderPassInfo.pSubpasses = &subpass;
 	auto renderPass = device.createRenderPass(renderPassInfo);
 
+	vk::GraphicsPipelineCreateInfo pipelineInfo;
+	pipelineInfo.stageCount = 2;
+	pipelineInfo.pStages = stages;
+	pipelineInfo.pVertexInputState = &vertexInputInfo;
+	pipelineInfo.pInputAssemblyState = &inputAssembly;
+	pipelineInfo.pViewportState = &viewportState;
+	pipelineInfo.pRasterizationState = &rasterInfo;
+	pipelineInfo.pMultisampleState = &multisample;
+	pipelineInfo.pDepthStencilState = nullptr;
+	pipelineInfo.pColorBlendState = &colorblendInfo;
+	pipelineInfo.pDynamicState = &dynamicState;
+	pipelineInfo.layout = pipelineLayout;
+	pipelineInfo.renderPass = renderPass;
+	pipelineInfo.subpass = 0;
+
+	auto graphicsPipeline = device.createGraphicsPipeline(nullptr, pipelineInfo);
+	if (graphicsPipeline.result != vk::Result::eSuccess) {
+		std::cerr << "Failed to create graphics pipeline: " << graphicsPipeline.result << std::endl;
+		return -1;
+	}
+
 
 
 
@@ -423,6 +450,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 			DispatchMessage(&msg);
 		}
 	}
+	device.destroyPipeline(graphicsPipeline.value);
 	device.destroyRenderPass(renderPass);
 	device.destroyPipelineLayout(pipelineLayout);
 	device.destroyShaderModule(fragment);
