@@ -432,6 +432,35 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		return -1;
 	}
 
+	std::vector<vk::Framebuffer> swapchainFramebuffers(imageViews.size());
+
+	for (size_t i = 0; i < swapchainFramebuffers.size(); i++) {
+		vk::ImageView attachments[] = { imageViews[i] };
+		vk::FramebufferCreateInfo fbci;
+		fbci.renderPass = renderPass;
+		fbci.attachmentCount = 1;
+		fbci.pAttachments = attachments;
+		fbci.width = extent.width;
+		fbci.height = extent.height;
+		fbci.layers = 1;
+		swapchainFramebuffers[i] = device.createFramebuffer(fbci);
+	}
+
+	vk::CommandPoolCreateInfo poolInfo;
+	poolInfo.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer;
+	poolInfo.queueFamilyIndex = targetDevice->graphicsIndex;
+	auto commandPool = device.createCommandPool(poolInfo);
+	vk::CommandBufferAllocateInfo cbai;
+	cbai.commandPool = commandPool;
+	cbai.level = vk::CommandBufferLevel::ePrimary;
+	cbai.commandBufferCount = 1;
+	auto commandBuffers = device.allocateCommandBuffers(cbai);
+
+	constexpr int commandBufferIndex = 0;
+	vk::CommandBufferBeginInfo cbbi;
+	commandBuffers[commandBufferIndex].begin(cbbi);
+
+
 
 
 
@@ -449,6 +478,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 			TranslateMessage(&msg);
 			DispatchMessage(&msg);
 		}
+	}
+	device.destroyCommandPool(commandPool);
+	for (auto& fb : swapchainFramebuffers) {
+		device.destroyFramebuffer(fb);
 	}
 	device.destroyPipeline(graphicsPipeline.value);
 	device.destroyRenderPass(renderPass);
