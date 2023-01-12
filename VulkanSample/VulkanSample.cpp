@@ -457,28 +457,55 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	auto commandBuffers = device.allocateCommandBuffers(cbai);
 
 	constexpr int commandBufferIndex = 0;
+	constexpr int imageIndex = 0;
+	auto& cb = commandBuffers[commandBufferIndex];
 	vk::CommandBufferBeginInfo cbbi;
-	commandBuffers[commandBufferIndex].begin(cbbi);
-
-
-
-
-
-
+	cb.begin(cbbi);
+	vk::RenderPassBeginInfo rpbi;
+	rpbi.renderPass = renderPass;
+	rpbi.framebuffer = swapchainFramebuffers[imageIndex];
+	rpbi.renderArea.offset = vk::Offset2D(0, 0);
+	rpbi.renderArea.extent = extent;
+	rpbi.clearValueCount = 1;
+	vk::ClearValue clearColor(vk::ClearColorValue(0, 0, 0, 1));
+	rpbi.pClearValues = &clearColor;
+	cb.beginRenderPass(rpbi, vk::SubpassContents::eInline);
+	cb.bindPipeline(vk::PipelineBindPoint::eGraphics, graphicsPipeline.value);
+	cb.setViewport(0, vk::Viewport(0, 0, (float)extent.width, (float)extent.height, 0, 1));
+	cb.setScissor(0, vk::Rect2D({ 0,0 }, extent));
+	cb.draw(3, 1, 0, 0);
+	cb.endRenderPass();
+	cb.end();
 
 	HACCEL hAccelTable = LoadAccelerators(hInstance, MAKEINTRESOURCE(IDC_VULKANSAMPLE));
-
-	MSG msg;
-
+	auto imageAvailableSemaphore = device.createSemaphore(vk::SemaphoreCreateInfo());
+	auto renderFinishedSemaphore = device.createSemaphore(vk::SemaphoreCreateInfo());
+	auto inFlightFence = device.createFence(vk::FenceCreateInfo(vk::FenceCreateFlagBits::eSignaled));
 	// メイン メッセージ ループ:
-	while (GetMessage(&msg, nullptr, 0, 0))
+	bool rendering = true;
+	while (rendering)
 	{
-		if (!TranslateAccelerator(msg.hwnd, hAccelTable, &msg))
-		{
-			TranslateMessage(&msg);
-			DispatchMessage(&msg);
+		MSG msg;
+		if (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
+			if (msg.message == WM_QUIT) {
+				rendering = false;
+			}
+			else if (!TranslateAccelerator(msg.hwnd, hAccelTable, &msg))
+			{
+				TranslateMessage(&msg);
+				DispatchMessage(&msg);
+			}
+		}
+		else {
+			// render
+			Sleep(10);
+			//auto result = device.waitForFences(inFlightFence, true, UINT64_MAX);
+			//device.resetFences(inFlightFence);
 		}
 	}
+	device.destroySemaphore(imageAvailableSemaphore);
+	device.destroySemaphore(renderFinishedSemaphore);
+	device.destroyFence(inFlightFence);
 	device.destroyCommandPool(commandPool);
 	for (auto& fb : swapchainFramebuffers) {
 		device.destroyFramebuffer(fb);
@@ -496,7 +523,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	instance.destroySurfaceKHR(surface);
 	instance.destroy();
 
-	return (int)msg.wParam;
+	return 0;
 }
 
 
