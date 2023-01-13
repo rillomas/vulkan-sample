@@ -193,6 +193,31 @@ vk::ShaderModule CreateShaderModule(vk::Device& device, const std::vector<uint8_
 	return device.createShaderModule(shaderInfo);
 }
 
+void RecordCommandBuffer(
+	vk::CommandBuffer& cb,
+	vk::RenderPass renderPass,
+	vk::Framebuffer framebuffer,
+	vk::Extent2D extent,
+	vk::Pipeline pipeline) {
+	vk::CommandBufferBeginInfo cbbi;
+	cb.begin(cbbi);
+	vk::RenderPassBeginInfo rpbi;
+	rpbi.renderPass = renderPass;
+	rpbi.framebuffer = framebuffer;
+	rpbi.renderArea.offset = vk::Offset2D(0, 0);
+	rpbi.renderArea.extent = extent;
+	rpbi.clearValueCount = 1;
+	vk::ClearValue clearColor(vk::ClearColorValue(0, 0, 0, 1));
+	rpbi.pClearValues = &clearColor;
+	cb.beginRenderPass(rpbi, vk::SubpassContents::eInline);
+	cb.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
+	cb.setViewport(0, vk::Viewport(0, 0, (float)extent.width, (float)extent.height, 0, 1));
+	cb.setScissor(0, vk::Rect2D({ 0,0 }, extent));
+	cb.draw(3, 1, 0, 0);
+	cb.endRenderPass();
+	cb.end();
+}
+
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	_In_opt_ HINSTANCE hPrevInstance,
 	_In_ LPWSTR    lpCmdLine,
@@ -404,11 +429,21 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	subpass.colorAttachmentCount = 1;
 	subpass.pColorAttachments = &colorAttachmentRef;
 
+	vk::SubpassDependency dependency;
+	dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+	dependency.dstSubpass = 0;
+	dependency.srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+	dependency.srcAccessMask = vk::AccessFlagBits::eNone;
+	dependency.dstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+	dependency.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+
 	vk::RenderPassCreateInfo renderPassInfo;
 	renderPassInfo.attachmentCount = 1;
 	renderPassInfo.pAttachments = &colorAttachment;
 	renderPassInfo.subpassCount = 1;
 	renderPassInfo.pSubpasses = &subpass;
+	renderPassInfo.dependencyCount = 1;
+	renderPassInfo.pDependencies = &dependency;
 	auto renderPass = device.createRenderPass(renderPassInfo);
 
 	vk::GraphicsPipelineCreateInfo pipelineInfo;
@@ -459,28 +494,12 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	constexpr int commandBufferIndex = 0;
 	constexpr int imageIndex = 0;
 	auto& cb = commandBuffers[commandBufferIndex];
-	vk::CommandBufferBeginInfo cbbi;
-	cb.begin(cbbi);
-	vk::RenderPassBeginInfo rpbi;
-	rpbi.renderPass = renderPass;
-	rpbi.framebuffer = swapchainFramebuffers[imageIndex];
-	rpbi.renderArea.offset = vk::Offset2D(0, 0);
-	rpbi.renderArea.extent = extent;
-	rpbi.clearValueCount = 1;
-	vk::ClearValue clearColor(vk::ClearColorValue(0, 0, 0, 1));
-	rpbi.pClearValues = &clearColor;
-	cb.beginRenderPass(rpbi, vk::SubpassContents::eInline);
-	cb.bindPipeline(vk::PipelineBindPoint::eGraphics, graphicsPipeline.value);
-	cb.setViewport(0, vk::Viewport(0, 0, (float)extent.width, (float)extent.height, 0, 1));
-	cb.setScissor(0, vk::Rect2D({ 0,0 }, extent));
-	cb.draw(3, 1, 0, 0);
-	cb.endRenderPass();
-	cb.end();
 
 	HACCEL hAccelTable = LoadAccelerators(hInstance, MAKEINTRESOURCE(IDC_VULKANSAMPLE));
 	auto imageAvailableSemaphore = device.createSemaphore(vk::SemaphoreCreateInfo());
 	auto renderFinishedSemaphore = device.createSemaphore(vk::SemaphoreCreateInfo());
 	auto inFlightFence = device.createFence(vk::FenceCreateInfo(vk::FenceCreateFlagBits::eSignaled));
+	auto graphicsQueue = device.getQueue(targetDevice->graphicsIndex, 0);
 	// メイン メッセージ ループ:
 	bool rendering = true;
 	while (rendering)
@@ -497,10 +516,30 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 			}
 		}
 		else {
-			// render
 			Sleep(10);
-			//auto result = device.waitForFences(inFlightFence, true, UINT64_MAX);
-			//device.resetFences(inFlightFence);
+			// render
+			auto result = device.waitForFences(inFlightFence, true, UINT64_MAX);
+			device.resetFences(inFlightFence);
+			auto index = device.acquireNextImageKHR(swapchain, UINT64_MAX, imageAvailableSemaphore, nullptr);
+			cb.reset();
+			RecordCommandBuffer(cb, renderPass, swapchainFramebuffers[index.value], extent, graphicsPipeline.value);
+			vk::SubmitInfo submitInfo;
+			submitInfo.waitSemaphoreCount = 1;
+			submitInfo.pWaitSemaphores = &imageAvailableSemaphore;
+			vk::PipelineStageFlags waitStages[] = { vk::PipelineStageFlagBits::eColorAttachmentOutput };
+			submitInfo.pWaitDstStageMask = waitStages;
+			submitInfo.commandBufferCount = 1;
+			submitInfo.pCommandBuffers = &cb;
+			submitInfo.signalSemaphoreCount = 1;
+			submitInfo.pSignalSemaphores = &renderFinishedSemaphore;
+			graphicsQueue.submit(submitInfo, inFlightFence);
+			vk::PresentInfoKHR pi;
+			pi.waitSemaphoreCount = 1;
+			pi.pWaitSemaphores = &renderFinishedSemaphore;
+			pi.swapchainCount = 1;
+			pi.pSwapchains = &swapchain;
+			pi.pImageIndices = &index.value;
+			result = presentQueue.presentKHR(pi);
 		}
 	}
 	device.destroySemaphore(imageAvailableSemaphore);
