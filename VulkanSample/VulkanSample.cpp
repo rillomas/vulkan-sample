@@ -24,6 +24,152 @@ std::optional<HWND> InitInstance(HINSTANCE, int);
 LRESULT CALLBACK    WndProc(HWND, UINT, WPARAM, LPARAM);
 INT_PTR CALLBACK    About(HWND, UINT, WPARAM, LPARAM);
 
+template<class T>
+static bool contains(std::vector<T> list, T target) {
+	return std::find(list.begin(), list.end(), target) != list.end();
+}
+
+static uint32_t ChooseImageCount(vk::SurfaceCapabilitiesKHR capabilities) {
+	auto imgCount = capabilities.minImageCount + 1;
+	if (capabilities.maxImageCount > 0 && imgCount > capabilities.maxImageCount) {
+		imgCount = capabilities.maxImageCount;
+	}
+	return imgCount;
+}
+
+
+struct ResourcePerFrame {
+	vk::Semaphore imageAvailable;
+	vk::Semaphore renderFinished;
+	vk::Fence inFlight;
+};
+
+struct SwapchainSupportDetails {
+	vk::SurfaceCapabilitiesKHR capabilities;
+	std::vector<vk::SurfaceFormatKHR> formats;
+	std::vector<vk::PresentModeKHR> presentModes;
+
+	bool SwapchainAdequate(vk::SurfaceFormatKHR targetFormat, vk::PresentModeKHR targetMode) const {
+		return contains(formats, targetFormat) && contains(presentModes, targetMode);
+	}
+};
+
+
+struct DeviceAndIndex {
+	vk::PhysicalDevice device;
+	uint32_t graphicsIndex;
+	uint32_t presentIndex;
+
+	std::vector<vk::DeviceQueueCreateInfo> GetQueueCreateInfoList(float* priority) const {
+		std::vector<vk::DeviceQueueCreateInfo> qInfoList;
+		vk::DeviceQueueCreateInfo qinfo;
+		qinfo.queueFamilyIndex = graphicsIndex;
+		qinfo.queueCount = 1;
+		qinfo.pQueuePriorities = priority;
+		qInfoList.push_back(qinfo);
+		if (graphicsIndex != presentIndex) {
+			// We add two queue info only if they have different indices
+			qinfo.queueFamilyIndex = presentIndex;
+			qInfoList.push_back(qinfo);
+		}
+		return qInfoList;
+	}
+
+	SwapchainSupportDetails GetSwapchainSupportDetails(vk::SurfaceKHR& surface) const {
+		SwapchainSupportDetails details = {
+			device.getSurfaceCapabilitiesKHR(surface),
+			device.getSurfaceFormatsKHR(surface),
+			device.getSurfacePresentModesKHR(surface)
+		};
+		return details;
+	}
+};
+
+
+struct SwapchainResources {
+	vk::SwapchainKHR swapchain;
+	std::vector<vk::Framebuffer> frameBuffers;
+	std::vector<vk::ImageView> imageViews;
+	void Cleanup(vk::Device& device) {
+		for (auto& fb : frameBuffers) {
+			device.destroyFramebuffer(fb);
+		}
+		for (auto& iv : imageViews) {
+			device.destroyImageView(iv);
+		}
+		device.destroySwapchainKHR(swapchain);
+
+	}
+	void Init(
+		vk::Device& device,
+		vk::Extent2D extent,
+		vk::SurfaceKHR surface,
+		vk::SurfaceFormatKHR targetFormat,
+		vk::SurfaceCapabilitiesKHR capabilities,
+		vk::PresentModeKHR targetMode,
+		vk::RenderPass renderPass,
+		DeviceAndIndex targetDevice) {
+		vk::SwapchainCreateInfoKHR chainInfo;
+		chainInfo.surface = surface;
+		chainInfo.minImageCount = ChooseImageCount(capabilities);
+		chainInfo.imageFormat = targetFormat.format;
+		chainInfo.imageColorSpace = targetFormat.colorSpace;
+		chainInfo.imageExtent = extent;
+		chainInfo.imageArrayLayers = 1;
+		chainInfo.imageUsage = vk::ImageUsageFlagBits::eColorAttachment;
+		std::vector<uint32_t> queueFamilyIndices = { targetDevice.graphicsIndex, targetDevice.presentIndex };
+		if (targetDevice.graphicsIndex == targetDevice.presentIndex) {
+			chainInfo.imageSharingMode = vk::SharingMode::eExclusive;
+			chainInfo.queueFamilyIndexCount = 0;
+			chainInfo.pQueueFamilyIndices = nullptr;
+		}
+		else {
+			chainInfo.imageSharingMode = vk::SharingMode::eConcurrent;
+			chainInfo.queueFamilyIndexCount = (uint32_t)queueFamilyIndices.size();
+			chainInfo.pQueueFamilyIndices = queueFamilyIndices.data();
+		}
+		chainInfo.preTransform = capabilities.currentTransform;
+		chainInfo.compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque;
+		chainInfo.presentMode = targetMode;
+		chainInfo.clipped = true;
+		chainInfo.oldSwapchain = nullptr;
+		swapchain = device.createSwapchainKHR(chainInfo);
+
+		auto swapchainImages = device.getSwapchainImagesKHR(swapchain);
+		imageViews.resize(swapchainImages.size());
+		for (size_t i = 0; i < swapchainImages.size(); i++) {
+			vk::ImageViewCreateInfo ci;
+			ci.image = swapchainImages[i];
+			ci.viewType = vk::ImageViewType::e2D;
+			ci.format = targetFormat.format;
+			ci.components.r = vk::ComponentSwizzle::eIdentity;
+			ci.components.g = vk::ComponentSwizzle::eIdentity;
+			ci.components.b = vk::ComponentSwizzle::eIdentity;
+			ci.components.a = vk::ComponentSwizzle::eIdentity;
+			ci.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+			ci.subresourceRange.baseMipLevel = 0;
+			ci.subresourceRange.levelCount = 1;
+			ci.subresourceRange.baseArrayLayer = 0;
+			ci.subresourceRange.layerCount = 1;
+			imageViews[i] = device.createImageView(ci);
+		}
+
+		frameBuffers.resize(imageViews.size());
+
+		for (size_t i = 0; i < frameBuffers.size(); i++) {
+			vk::ImageView attachments[] = { imageViews[i] };
+			vk::FramebufferCreateInfo fbci;
+			fbci.renderPass = renderPass;
+			fbci.attachmentCount = 1;
+			fbci.pAttachments = attachments;
+			fbci.width = extent.width;
+			fbci.height = extent.height;
+			fbci.layers = 1;
+			frameBuffers[i] = device.createFramebuffer(fbci);
+		}
+	}
+};
+
 static std::vector <std::string> GetInstanceLayers(std::vector<std::string>& layerCandidate) {
 	std::vector<std::string> layersInUse;
 	if (layerCandidate.empty()) {
@@ -70,63 +216,9 @@ void CreateConsole() {
 	freopen_s(&fp, "CONOUT$", "w", stderr);
 }
 
-template<class T>
-static bool contains(std::vector<T> list, T target) {
-	return std::find(list.begin(), list.end(), target) != list.end();
-}
-
-struct SwapChainSupportDetails {
-	vk::SurfaceCapabilitiesKHR capabilities;
-	std::vector<vk::SurfaceFormatKHR> formats;
-	std::vector<vk::PresentModeKHR> presentModes;
-
-	bool SwapChainAdequate(vk::SurfaceFormatKHR targetFormat, vk::PresentModeKHR targetMode) const {
-		return contains(formats, targetFormat) && contains(presentModes, targetMode);
-	}
-
-};
-
 vk::Extent2D ChooseSwapExtent(vk::SurfaceCapabilitiesKHR capabilities) {
 	return capabilities.currentExtent;
 }
-
-uint32_t ChooseImageCount(vk::SurfaceCapabilitiesKHR capabilities) {
-	auto imgCount = capabilities.minImageCount + 1;
-	if (capabilities.maxImageCount > 0 && imgCount > capabilities.maxImageCount) {
-		imgCount = capabilities.maxImageCount;
-	}
-	return imgCount;
-}
-
-struct DeviceAndIndex {
-	vk::PhysicalDevice device;
-	uint32_t graphicsIndex;
-	uint32_t presentIndex;
-
-	std::vector<vk::DeviceQueueCreateInfo> GetQueueCreateInfoList(float* priority) const {
-		std::vector<vk::DeviceQueueCreateInfo> qInfoList;
-		vk::DeviceQueueCreateInfo qinfo;
-		qinfo.queueFamilyIndex = graphicsIndex;
-		qinfo.queueCount = 1;
-		qinfo.pQueuePriorities = priority;
-		qInfoList.push_back(qinfo);
-		if (graphicsIndex != presentIndex) {
-			// We add two queue info only if they have different indices
-			qinfo.queueFamilyIndex = presentIndex;
-			qInfoList.push_back(qinfo);
-		}
-		return qInfoList;
-	}
-
-	SwapChainSupportDetails GetSwapChainSupportDetails(vk::SurfaceKHR& surface) const {
-		SwapChainSupportDetails details = {
-			device.getSurfaceCapabilitiesKHR(surface),
-			device.getSurfaceFormatsKHR(surface),
-			device.getSurfacePresentModesKHR(surface)
-		};
-		return details;
-	}
-};
 
 std::optional<DeviceAndIndex> GetSufficientDevice(vk::Instance& instance, vk::SurfaceKHR& surface, const std::vector<const char*>& requiredExtensions) {
 	auto devices = instance.enumeratePhysicalDevices();
@@ -277,10 +369,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
 	float priority = 1.0f;
 	auto qInfoList = targetDevice->GetQueueCreateInfoList(&priority);
-	auto details = targetDevice->GetSwapChainSupportDetails(surface);
+	auto details = targetDevice->GetSwapchainSupportDetails(surface);
 	auto targetFormat = vk::SurfaceFormatKHR(vk::Format::eB8G8R8A8Srgb, vk::ColorSpaceKHR::eSrgbNonlinear);
 	auto targetMode = vk::PresentModeKHR::eFifo;
-	if (!details.SwapChainAdequate(targetFormat, targetMode)) {
+	if (!details.SwapchainAdequate(targetFormat, targetMode)) {
 		std::cerr << "Could not find sufficient swap chain" << std::endl;
 		return false;
 	}
@@ -296,51 +388,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	auto device = targetDevice->device.createDevice(info);
 	auto presentQueue = device.getQueue(targetDevice->presentIndex, 0);
 	auto extent = ChooseSwapExtent(details.capabilities);
-
-	vk::SwapchainCreateInfoKHR chainInfo;
-	chainInfo.surface = surface;
-	chainInfo.minImageCount = ChooseImageCount(details.capabilities);
-	chainInfo.imageFormat = targetFormat.format;
-	chainInfo.imageColorSpace = targetFormat.colorSpace;
-	chainInfo.imageExtent = extent;
-	chainInfo.imageArrayLayers = 1;
-	chainInfo.imageUsage = vk::ImageUsageFlagBits::eColorAttachment;
-	std::vector<uint32_t> queueFamilyIndices = { targetDevice->graphicsIndex, targetDevice->presentIndex };
-	if (targetDevice->graphicsIndex == targetDevice->presentIndex) {
-		chainInfo.imageSharingMode = vk::SharingMode::eExclusive;
-		chainInfo.queueFamilyIndexCount = 0;
-		chainInfo.pQueueFamilyIndices = nullptr;
-	}
-	else {
-		chainInfo.imageSharingMode = vk::SharingMode::eConcurrent;
-		chainInfo.queueFamilyIndexCount = (uint32_t)queueFamilyIndices.size();
-		chainInfo.pQueueFamilyIndices = queueFamilyIndices.data();
-	}
-	chainInfo.preTransform = details.capabilities.currentTransform;
-	chainInfo.compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque;
-	chainInfo.presentMode = targetMode;
-	chainInfo.clipped = true;
-	chainInfo.oldSwapchain = nullptr;
-	auto swapchain = device.createSwapchainKHR(chainInfo);
-
-	auto swapchainImages = device.getSwapchainImagesKHR(swapchain);
-	std::vector<vk::ImageView> imageViews(swapchainImages.size());
-	for (size_t i = 0; i < swapchainImages.size(); i++) {
-		vk::ImageViewCreateInfo ci;
-		ci.image = swapchainImages[i];
-		ci.viewType = vk::ImageViewType::e2D;
-		ci.format = targetFormat.format;
-		ci.components.r = vk::ComponentSwizzle::eIdentity;
-		ci.components.g = vk::ComponentSwizzle::eIdentity;
-		ci.components.b = vk::ComponentSwizzle::eIdentity;
-		ci.components.a = vk::ComponentSwizzle::eIdentity;
-		ci.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
-		ci.subresourceRange.baseMipLevel = 0;
-		ci.subresourceRange.levelCount = 1;
-		ci.subresourceRange.baseArrayLayer = 0;
-		ci.subresourceRange.layerCount = 1;
-		imageViews[i] = device.createImageView(ci);
-	}
 
 	// Create shaders
 	auto fragmentCode = ::ReadFile("fragment.spv");
@@ -446,6 +493,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	renderPassInfo.pDependencies = &dependency;
 	auto renderPass = device.createRenderPass(renderPassInfo);
 
+	SwapchainResources swapchainResources;
+	swapchainResources.Init(device, extent, surface, targetFormat, details.capabilities, targetMode, renderPass, targetDevice.value());
+
 	vk::GraphicsPipelineCreateInfo pipelineInfo;
 	pipelineInfo.stageCount = 2;
 	pipelineInfo.pStages = stages;
@@ -467,20 +517,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		return -1;
 	}
 
-	std::vector<vk::Framebuffer> swapchainFramebuffers(imageViews.size());
-
-	for (size_t i = 0; i < swapchainFramebuffers.size(); i++) {
-		vk::ImageView attachments[] = { imageViews[i] };
-		vk::FramebufferCreateInfo fbci;
-		fbci.renderPass = renderPass;
-		fbci.attachmentCount = 1;
-		fbci.pAttachments = attachments;
-		fbci.width = extent.width;
-		fbci.height = extent.height;
-		fbci.layers = 1;
-		swapchainFramebuffers[i] = device.createFramebuffer(fbci);
-	}
-
 	vk::CommandPoolCreateInfo poolInfo;
 	poolInfo.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer;
 	poolInfo.queueFamilyIndex = targetDevice->graphicsIndex;
@@ -492,12 +528,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	cbai.level = vk::CommandBufferLevel::ePrimary;
 	cbai.commandBufferCount = MAX_FRAMES_IN_FLIGHT;
 	auto commandBuffers = device.allocateCommandBuffers(cbai);
-
-	struct ResourcePerFrame {
-		vk::Semaphore imageAvailable;
-		vk::Semaphore renderFinished;
-		vk::Fence inFlight;
-	};
 
 	std::vector<ResourcePerFrame> frameResources(MAX_FRAMES_IN_FLIGHT);
 
@@ -516,10 +546,18 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	{
 		MSG msg;
 		if (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
-			if (msg.message == WM_QUIT) {
+			switch (msg.message) {
+			case WM_QUIT:
 				rendering = false;
+				break;
+			case WM_SIZE:
+				auto width = LOWORD(msg.lParam);
+				auto height = HIWORD(msg.lParam);
+				device.waitIdle();
+				//ResizeSwapchain(width, height);
+				break;
 			}
-			else if (!TranslateAccelerator(msg.hwnd, hAccelTable, &msg))
+			if (!TranslateAccelerator(msg.hwnd, hAccelTable, &msg))
 			{
 				TranslateMessage(&msg);
 				DispatchMessage(&msg);
@@ -533,9 +571,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 			// render
 			auto result = device.waitForFences(rpf.inFlight, true, UINT64_MAX);
 			device.resetFences(rpf.inFlight);
-			auto index = device.acquireNextImageKHR(swapchain, UINT64_MAX, rpf.imageAvailable, nullptr);
+			auto index = device.acquireNextImageKHR(swapchainResources.swapchain, UINT64_MAX, rpf.imageAvailable, nullptr);
 			cb.reset();
-			RecordCommandBuffer(cb, renderPass, swapchainFramebuffers[index.value], extent, graphicsPipeline.value);
+			RecordCommandBuffer(cb, renderPass, swapchainResources.frameBuffers[index.value], extent, graphicsPipeline.value);
 			vk::SubmitInfo submitInfo;
 			submitInfo.waitSemaphoreCount = 1;
 			submitInfo.pWaitSemaphores = &rpf.imageAvailable;
@@ -550,7 +588,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 			pi.waitSemaphoreCount = 1;
 			pi.pWaitSemaphores = &rpf.renderFinished;
 			pi.swapchainCount = 1;
-			pi.pSwapchains = &swapchain;
+			pi.pSwapchains = &swapchainResources.swapchain;
 			pi.pImageIndices = &index.value;
 			result = presentQueue.presentKHR(pi);
 			numFrames++;
@@ -558,24 +596,18 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	}
 	// Wait for idle before destroying resources since they may still be in use
 	device.waitIdle();
+	swapchainResources.Cleanup(device);
 	for (auto& rpf : frameResources) {
 		device.destroySemaphore(rpf.imageAvailable);
 		device.destroySemaphore(rpf.renderFinished);
 		device.destroyFence(rpf.inFlight);
 	}
 	device.destroyCommandPool(commandPool);
-	for (auto& fb : swapchainFramebuffers) {
-		device.destroyFramebuffer(fb);
-	}
 	device.destroyPipeline(graphicsPipeline.value);
 	device.destroyRenderPass(renderPass);
 	device.destroyPipelineLayout(pipelineLayout);
 	device.destroyShaderModule(fragment);
 	device.destroyShaderModule(vertex);
-	for (auto& iv : imageViews) {
-		device.destroyImageView(iv);
-	}
-	device.destroySwapchainKHR(swapchain);
 	device.destroy();
 	instance.destroySurfaceKHR(surface);
 	instance.destroy();
@@ -680,6 +712,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 	break;
 	case WM_DESTROY:
 		PostQuitMessage(0);
+		break;
+	case WM_SIZE:
+		std::cout << "resized" << std::endl;
 		break;
 	default:
 		return DefWindowProc(hWnd, message, wParam, lParam);
