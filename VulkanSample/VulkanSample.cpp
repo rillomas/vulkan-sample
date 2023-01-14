@@ -485,23 +485,33 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	poolInfo.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer;
 	poolInfo.queueFamilyIndex = targetDevice->graphicsIndex;
 	auto commandPool = device.createCommandPool(poolInfo);
+
+	constexpr size_t MAX_FRAMES_IN_FLIGHT = 2;
 	vk::CommandBufferAllocateInfo cbai;
 	cbai.commandPool = commandPool;
 	cbai.level = vk::CommandBufferLevel::ePrimary;
-	cbai.commandBufferCount = 1;
+	cbai.commandBufferCount = MAX_FRAMES_IN_FLIGHT;
 	auto commandBuffers = device.allocateCommandBuffers(cbai);
 
-	constexpr int commandBufferIndex = 0;
-	constexpr int imageIndex = 0;
-	auto& cb = commandBuffers[commandBufferIndex];
+	struct ResourcePerFrame {
+		vk::Semaphore imageAvailable;
+		vk::Semaphore renderFinished;
+		vk::Fence inFlight;
+	};
 
-	HACCEL hAccelTable = LoadAccelerators(hInstance, MAKEINTRESOURCE(IDC_VULKANSAMPLE));
-	auto imageAvailableSemaphore = device.createSemaphore(vk::SemaphoreCreateInfo());
-	auto renderFinishedSemaphore = device.createSemaphore(vk::SemaphoreCreateInfo());
-	auto inFlightFence = device.createFence(vk::FenceCreateInfo(vk::FenceCreateFlagBits::eSignaled));
+	std::vector<ResourcePerFrame> frameResources(MAX_FRAMES_IN_FLIGHT);
+
+	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+		auto& rpf = frameResources[i];
+		rpf.imageAvailable = device.createSemaphore(vk::SemaphoreCreateInfo());
+		rpf.renderFinished = device.createSemaphore(vk::SemaphoreCreateInfo());
+		rpf.inFlight = device.createFence(vk::FenceCreateInfo(vk::FenceCreateFlagBits::eSignaled));
+	}
 	auto graphicsQueue = device.getQueue(targetDevice->graphicsIndex, 0);
 	// メイン メッセージ ループ:
+	HACCEL hAccelTable = LoadAccelerators(hInstance, MAKEINTRESOURCE(IDC_VULKANSAMPLE));
 	bool rendering = true;
+	size_t numFrames = 0;
 	while (rendering)
 	{
 		MSG msg;
@@ -517,34 +527,42 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		}
 		else {
 			Sleep(10);
+			const size_t commandBufferIndex = numFrames % MAX_FRAMES_IN_FLIGHT;
+			auto& cb = commandBuffers[commandBufferIndex];
+			auto& rpf = frameResources[commandBufferIndex];
 			// render
-			auto result = device.waitForFences(inFlightFence, true, UINT64_MAX);
-			device.resetFences(inFlightFence);
-			auto index = device.acquireNextImageKHR(swapchain, UINT64_MAX, imageAvailableSemaphore, nullptr);
+			auto result = device.waitForFences(rpf.inFlight, true, UINT64_MAX);
+			device.resetFences(rpf.inFlight);
+			auto index = device.acquireNextImageKHR(swapchain, UINT64_MAX, rpf.imageAvailable, nullptr);
 			cb.reset();
 			RecordCommandBuffer(cb, renderPass, swapchainFramebuffers[index.value], extent, graphicsPipeline.value);
 			vk::SubmitInfo submitInfo;
 			submitInfo.waitSemaphoreCount = 1;
-			submitInfo.pWaitSemaphores = &imageAvailableSemaphore;
+			submitInfo.pWaitSemaphores = &rpf.imageAvailable;
 			vk::PipelineStageFlags waitStages[] = { vk::PipelineStageFlagBits::eColorAttachmentOutput };
 			submitInfo.pWaitDstStageMask = waitStages;
 			submitInfo.commandBufferCount = 1;
 			submitInfo.pCommandBuffers = &cb;
 			submitInfo.signalSemaphoreCount = 1;
-			submitInfo.pSignalSemaphores = &renderFinishedSemaphore;
-			graphicsQueue.submit(submitInfo, inFlightFence);
+			submitInfo.pSignalSemaphores = &rpf.renderFinished;
+			graphicsQueue.submit(submitInfo, rpf.inFlight);
 			vk::PresentInfoKHR pi;
 			pi.waitSemaphoreCount = 1;
-			pi.pWaitSemaphores = &renderFinishedSemaphore;
+			pi.pWaitSemaphores = &rpf.renderFinished;
 			pi.swapchainCount = 1;
 			pi.pSwapchains = &swapchain;
 			pi.pImageIndices = &index.value;
 			result = presentQueue.presentKHR(pi);
+			numFrames++;
 		}
 	}
-	device.destroySemaphore(imageAvailableSemaphore);
-	device.destroySemaphore(renderFinishedSemaphore);
-	device.destroyFence(inFlightFence);
+	// Wait for idle before destroying resources since they may still be in use
+	device.waitIdle();
+	for (auto& rpf : frameResources) {
+		device.destroySemaphore(rpf.imageAvailable);
+		device.destroySemaphore(rpf.renderFinished);
+		device.destroyFence(rpf.inFlight);
+	}
 	device.destroyCommandPool(commandPool);
 	for (auto& fb : swapchainFramebuffers) {
 		device.destroyFramebuffer(fb);
