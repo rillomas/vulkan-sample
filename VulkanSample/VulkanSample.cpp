@@ -310,6 +310,47 @@ void RecordCommandBuffer(
 	cb.end();
 }
 
+class ResizeDetector {
+public:
+	ResizeDetector() :
+		_width(0),
+		_height(0),
+		_updated(false),
+		_updating(false) {}
+
+	bool Updated() const {
+		return _updated;
+	}
+	vk::Extent2D Extent() const {
+		return vk::Extent2D(_width, _height);
+	}
+
+	void Update(uint32_t width, uint32_t height) {
+		_width = width;
+		_height = height;
+		_updated = true;
+	}
+
+	void Enter() {
+		_updating = true;
+	}
+
+	void Exit() {
+		_updating = false;
+		std::cout << "resized to " << _width << "x" << _height << std::endl;
+	}
+	void Reset() {
+		_updating = false;
+		_updated = false;
+	}
+
+private:
+	bool _updating;
+	bool _updated;
+	uint32_t _width;
+	uint32_t _height;
+};
+
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	_In_opt_ HINSTANCE hPrevInstance,
 	_In_ LPWSTR    lpCmdLine,
@@ -538,6 +579,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		rpf.inFlight = device.createFence(vk::FenceCreateInfo(vk::FenceCreateFlagBits::eSignaled));
 	}
 	auto graphicsQueue = device.getQueue(targetDevice->graphicsIndex, 0);
+	ResizeDetector resizeDetector;
+	SetWindowLongPtr(hwnd.value(), GWLP_USERDATA, (LONG_PTR)&resizeDetector);
 	// メイン メッセージ ループ:
 	HACCEL hAccelTable = LoadAccelerators(hInstance, MAKEINTRESOURCE(IDC_VULKANSAMPLE));
 	bool rendering = true;
@@ -550,12 +593,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 			case WM_QUIT:
 				rendering = false;
 				break;
-			case WM_SIZE:
-				auto width = LOWORD(msg.lParam);
-				auto height = HIWORD(msg.lParam);
-				device.waitIdle();
-				//ResizeSwapchain(width, height);
-				break;
 			}
 			if (!TranslateAccelerator(msg.hwnd, hAccelTable, &msg))
 			{
@@ -565,6 +602,14 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		}
 		else {
 			Sleep(10);
+			if (resizeDetector.Updated()) {
+				// Update buffer size based on new window size
+				extent = resizeDetector.Extent();
+				device.waitIdle();
+				swapchainResources.Cleanup(device);
+				swapchainResources.Init(device, extent, surface, targetFormat, details.capabilities, targetMode, renderPass, targetDevice.value());
+				resizeDetector.Reset();
+			}
 			const size_t commandBufferIndex = numFrames % MAX_FRAMES_IN_FLIGHT;
 			auto& cb = commandBuffers[commandBufferIndex];
 			auto& rpf = frameResources[commandBufferIndex];
@@ -683,6 +728,7 @@ std::optional<HWND> InitInstance(HINSTANCE hInstance, int nCmdShow)
 //
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
+	auto detector = (ResizeDetector*)GetWindowLongPtr(hWnd, GWLP_USERDATA);
 	switch (message)
 	{
 	case WM_COMMAND:
@@ -713,9 +759,27 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 	case WM_DESTROY:
 		PostQuitMessage(0);
 		break;
-	case WM_SIZE:
-		std::cout << "resized" << std::endl;
+	case WM_ENTERSIZEMOVE:
+		if (detector) {
+			detector->Enter();
+		}
 		break;
+	case WM_SIZE:
+	{
+		if (detector) {
+			auto width = LOWORD(lParam);
+			auto height = HIWORD(lParam);
+			detector->Update(width, height);
+		}
+		break;
+	}
+	case WM_EXITSIZEMOVE:
+	{
+		if (detector) {
+			detector->Exit();
+		}
+		break;
+	}
 	default:
 		return DefWindowProc(hWnd, message, wParam, lParam);
 	}
