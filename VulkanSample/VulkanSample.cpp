@@ -310,43 +310,61 @@ void RecordCommandBuffer(
 	cb.end();
 }
 
-class ResizeDetector {
-public:
-	ResizeDetector() :
-		_width(0),
-		_height(0),
-		_updated(false),
-		_updating(false) {}
+enum WindowState {
+	RESTORED,
+	MINIMIZED,
+	MAXIMIZED,
+};
 
-	bool Updated() const {
-		return _updated;
+class EventDetector {
+public:
+	EventDetector(uint32_t width, uint32_t height) :
+		_state(RESTORED),
+		_width(width),
+		_height(height),
+		_resized(false),
+		_resizing(false) {}
+
+	bool Resized() const {
+		return _resized;
 	}
 	vk::Extent2D Extent() const {
 		return vk::Extent2D(_width, _height);
 	}
+	bool AreaIsZero() const {
+		return _width == 0 || _height == 0;
+	}
 
-	void Update(uint32_t width, uint32_t height) {
+	void UpdateSize(uint32_t width, uint32_t height) {
+		if (_width == width && _height == height) {
+			// Don't need to resize
+			return;
+		}
 		_width = width;
 		_height = height;
-		_updated = true;
+		_resized = true;
 	}
 
-	void Enter() {
-		_updating = true;
+	void EnterResize() {
+		_resizing = true;
 	}
 
-	void Exit() {
-		_updating = false;
-		std::cout << "resized to " << _width << "x" << _height << std::endl;
+	void SetState(WindowState state) {
+		_state = state;
 	}
-	void Reset() {
-		_updating = false;
-		_updated = false;
+
+	void ExitResize() {
+		_resizing = false;
+	}
+	void ResetResize() {
+		_resizing = false;
+		_resized = false;
 	}
 
 private:
-	bool _updating;
-	bool _updated;
+	WindowState _state;
+	bool _resizing;
+	bool _resized;
 	uint32_t _width;
 	uint32_t _height;
 };
@@ -579,8 +597,13 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		rpf.inFlight = device.createFence(vk::FenceCreateInfo(vk::FenceCreateFlagBits::eSignaled));
 	}
 	auto graphicsQueue = device.getQueue(targetDevice->graphicsIndex, 0);
-	ResizeDetector resizeDetector;
-	SetWindowLongPtr(hwnd.value(), GWLP_USERDATA, (LONG_PTR)&resizeDetector);
+	RECT rect;
+	if (!GetWindowRect(hwnd.value(), &rect)) {
+		std::cerr << "Failed to get window size" << std::endl;
+		return -1;
+	}
+	EventDetector eventDetector(rect.right - rect.left, rect.bottom - rect.top);
+	SetWindowLongPtr(hwnd.value(), GWLP_USERDATA, (LONG_PTR)&eventDetector);
 	// メイン メッセージ ループ:
 	HACCEL hAccelTable = LoadAccelerators(hInstance, MAKEINTRESOURCE(IDC_VULKANSAMPLE));
 	bool rendering = true;
@@ -602,13 +625,18 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		}
 		else {
 			Sleep(10);
-			if (resizeDetector.Updated()) {
+			if (eventDetector.AreaIsZero()) {
+				// Don't render when window area is zero
+				continue;
+			}
+			else if (eventDetector.Resized()) {
 				// Update buffer size based on new window size
-				extent = resizeDetector.Extent();
+				extent = eventDetector.Extent();
+				std::cout << "Resizing swapchain to " << extent.width << "x" << extent.height << std::endl;
 				device.waitIdle();
 				swapchainResources.Cleanup(device);
 				swapchainResources.Init(device, extent, surface, targetFormat, details.capabilities, targetMode, renderPass, targetDevice.value());
-				resizeDetector.Reset();
+				eventDetector.ResetResize();
 			}
 			const size_t commandBufferIndex = numFrames % MAX_FRAMES_IN_FLIGHT;
 			auto& cb = commandBuffers[commandBufferIndex];
@@ -728,7 +756,7 @@ std::optional<HWND> InitInstance(HINSTANCE hInstance, int nCmdShow)
 //
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
-	auto detector = (ResizeDetector*)GetWindowLongPtr(hWnd, GWLP_USERDATA);
+	auto detector = (EventDetector*)GetWindowLongPtr(hWnd, GWLP_USERDATA);
 	switch (message)
 	{
 	case WM_COMMAND:
@@ -761,22 +789,33 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		break;
 	case WM_ENTERSIZEMOVE:
 		if (detector) {
-			detector->Enter();
+			detector->EnterResize();
 		}
 		break;
 	case WM_SIZE:
 	{
 		if (detector) {
+			switch (wParam) {
+			case SIZE_RESTORED:
+				detector->SetState(WindowState::RESTORED);
+				break;
+			case SIZE_MINIMIZED:
+				detector->SetState(WindowState::MINIMIZED);
+				break;
+			case SIZE_MAXIMIZED:
+				detector->SetState(WindowState::MAXIMIZED);
+				break;
+			}
 			auto width = LOWORD(lParam);
 			auto height = HIWORD(lParam);
-			detector->Update(width, height);
+			detector->UpdateSize(width, height);
 		}
 		break;
 	}
 	case WM_EXITSIZEMOVE:
 	{
 		if (detector) {
-			detector->Exit();
+			detector->ExitResize();
 		}
 		break;
 	}
