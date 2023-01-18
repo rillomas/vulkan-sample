@@ -432,13 +432,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	}
 	vk::PhysicalDeviceFeatures deviceFeature;
 	vk::DeviceCreateInfo info;
-	info.pQueueCreateInfos = qInfoList.data();
-	info.queueCreateInfoCount = (uint32_t)qInfoList.size();
+	info.setQueueCreateInfos(qInfoList);
 	info.pEnabledFeatures = &deviceFeature;
-	info.enabledLayerCount = (uint32_t)actualLayers.size();
-	info.ppEnabledLayerNames = actualLayers.data();
-	info.enabledExtensionCount = (uint32_t)deviceExtensions.size();
-	info.ppEnabledExtensionNames = deviceExtensions.data();
+	info.setPEnabledLayerNames(actualLayers);
+	info.setPEnabledExtensionNames(deviceExtensions);
 	auto device = targetDevice->device.createDeviceUnique(info);
 	auto presentQueue = device->getQueue(targetDevice->presentIndex, 0);
 	auto extent = ChooseSwapExtent(details.capabilities);
@@ -446,9 +443,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	// Create shaders
 	auto fragmentCode = ::ReadFile("fragment.spv");
 	auto vertexCode = ::ReadFile("vertex.spv");
+	auto computeCode = ::ReadFile("compute.spv");
 
 	auto fragment = CreateShaderModule(device, fragmentCode);
 	auto vertex = CreateShaderModule(device, vertexCode);
+	auto compute = CreateShaderModule(device, computeCode);
 
 	vk::PipelineShaderStageCreateInfo vertShaderStageInfo;
 	vertShaderStageInfo.stage = vk::ShaderStageFlagBits::eVertex;
@@ -460,11 +459,12 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	fragShaderStageInfo.module = fragment.get();
 	fragShaderStageInfo.pName = "main";
 
-	vk::PipelineShaderStageCreateInfo stages[] = { vertShaderStageInfo, fragShaderStageInfo };
+	vk::PipelineShaderStageCreateInfo computeShaderStageInfo;
+	computeShaderStageInfo.stage = vk::ShaderStageFlagBits::eCompute;
+	computeShaderStageInfo.module = compute.get();
+	computeShaderStageInfo.pName = "main";
 
-	vk::PipelineVertexInputStateCreateInfo vertexInputInfo;
-	vertexInputInfo.vertexBindingDescriptionCount = 0;
-	vertexInputInfo.vertexAttributeDescriptionCount = 0;
+	vk::PipelineShaderStageCreateInfo stages[] = { vertShaderStageInfo, fragShaderStageInfo };
 
 	vk::PipelineInputAssemblyStateCreateInfo inputAssembly;
 	inputAssembly.topology = vk::PrimitiveTopology::eTriangleList;
@@ -480,10 +480,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	dynamicState.dynamicStateCount = (uint32_t)dynamicStates.size();
 	dynamicState.pDynamicStates = dynamicStates.data();
 	vk::PipelineViewportStateCreateInfo viewportState;
-	viewportState.viewportCount = 1;
-	viewportState.pViewports = &viewport;
-	viewportState.scissorCount = 1;
-	viewportState.pScissors = &scissor;
+	viewportState.setViewports(viewport);
+	viewportState.setScissors(scissor);
 
 	vk::PipelineRasterizationStateCreateInfo rasterInfo;
 	rasterInfo.depthClampEnable = false;
@@ -505,8 +503,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	vk::PipelineColorBlendStateCreateInfo colorblendInfo;
 	colorblendInfo.logicOp = vk::LogicOp::eCopy;
 	colorblendInfo.logicOpEnable = false;
-	colorblendInfo.attachmentCount = 1;
-	colorblendInfo.pAttachments = &colorblend;
+	colorblendInfo.setAttachments(colorblend);
 
 	vk::PipelineLayoutCreateInfo pipelineLayoutInfo;
 	auto pipelineLayout = device->createPipelineLayoutUnique(pipelineLayoutInfo);
@@ -527,8 +524,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
 	vk::SubpassDescription subpass;
 	subpass.pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
-	subpass.colorAttachmentCount = 1;
-	subpass.pColorAttachments = &colorAttachmentRef;
+	subpass.setColorAttachments(colorAttachmentRef);
 
 	vk::SubpassDependency dependency;
 	dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
@@ -539,20 +535,17 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	dependency.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
 
 	vk::RenderPassCreateInfo renderPassInfo;
-	renderPassInfo.attachmentCount = 1;
-	renderPassInfo.pAttachments = &colorAttachment;
-	renderPassInfo.subpassCount = 1;
-	renderPassInfo.pSubpasses = &subpass;
-	renderPassInfo.dependencyCount = 1;
-	renderPassInfo.pDependencies = &dependency;
+	renderPassInfo.setAttachments(colorAttachment);
+	renderPassInfo.setSubpasses(subpass);
+	renderPassInfo.setDependencies(dependency);
 	auto renderPass = device->createRenderPassUnique(renderPassInfo);
 
 	SwapchainResources swapchainResources;
 	swapchainResources.Init(device, extent, surface, targetFormat, details.capabilities, targetMode, renderPass, targetDevice.value());
 
+	vk::PipelineVertexInputStateCreateInfo vertexInputInfo;
 	vk::GraphicsPipelineCreateInfo pipelineInfo;
-	pipelineInfo.stageCount = 2;
-	pipelineInfo.pStages = stages;
+	pipelineInfo.setStages(stages);
 	pipelineInfo.pVertexInputState = &vertexInputInfo;
 	pipelineInfo.pInputAssemblyState = &inputAssembly;
 	pipelineInfo.pViewportState = &viewportState;
@@ -568,6 +561,36 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	auto graphicsPipeline = device->createGraphicsPipelineUnique(nullptr, pipelineInfo);
 	if (graphicsPipeline.result != vk::Result::eSuccess) {
 		std::cerr << "Failed to create graphics pipeline: " << graphicsPipeline.result << std::endl;
+		return -1;
+	}
+
+	vk::DescriptorPoolSize poolSize;
+	poolSize.type = vk::DescriptorType::eStorageBuffer;
+	poolSize.descriptorCount = 10;
+	vk::DescriptorPoolCreateInfo dpci;
+	dpci.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet;
+	dpci.setPoolSizes(poolSize);
+	dpci.maxSets = 1;
+
+	vk::DescriptorSetLayoutBinding dslb;
+	dslb.descriptorCount = 3;
+	dslb.descriptorType = vk::DescriptorType::eStorageBuffer;
+	dslb.stageFlags = vk::ShaderStageFlagBits::eCompute;
+
+	vk::DescriptorSetLayoutCreateInfo dslci;
+	dslci.setBindings(dslb);
+	auto descSetLayout = device->createDescriptorSetLayoutUnique(dslci);
+
+	vk::PipelineLayoutCreateInfo plci;
+	plci.setSetLayouts(descSetLayout.get());
+	auto computePipelineLayout = device->createPipelineLayoutUnique(plci);
+
+	vk::ComputePipelineCreateInfo cpci;
+	cpci.stage = computeShaderStageInfo;
+	cpci.layout = computePipelineLayout.get();
+	auto computePipeline = device->createComputePipelineUnique(nullptr, cpci);
+	if (computePipeline.result != vk::Result::eSuccess) {
+		std::cerr << "Failed to create compute pipeline: " << computePipeline.result << std::endl;
 		return -1;
 	}
 
