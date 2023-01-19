@@ -364,6 +364,49 @@ private:
 	uint32_t _height;
 };
 
+std::optional<uint32_t> findMemoryTypeIndex(
+	vk::PhysicalDevice& device,
+	const vk::MemoryRequirements& requirement,
+	const vk::MemoryPropertyFlags& property) {
+	auto memoryProps = device.getMemoryProperties();
+	for (uint32_t idx = 0; idx < memoryProps.memoryTypeCount; idx++) {
+		auto flags = memoryProps.memoryTypes[idx].propertyFlags;
+		auto matches = (flags & property) == property;
+		if (requirement.memoryTypeBits & (1 << idx) && matches) {
+			return idx;
+		}
+	}
+	return std::nullopt;
+}
+
+template<class T>
+struct StorageBuffer {
+	StorageBuffer(vk::UniqueDevice& device, vk::PhysicalDevice& physicalDevice, const std::vector<T>& data) {
+		memorySize = sizeof(T) * data.size();
+		vk::BufferCreateInfo bci;
+		bci.size = memorySize;
+		bci.usage = vk::BufferUsageFlagBits::eStorageBuffer;
+		buffer = device->createBufferUnique(bci);
+
+		auto requirement = device->getBufferMemoryRequirements(buffer.get());
+		auto memoryTypeIndex = findMemoryTypeIndex(physicalDevice, requirement, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+		if (!memoryTypeIndex.has_value()) {
+			throw std::runtime_error("Failed to find sufficient memory type index");
+		}
+		vk::MemoryAllocateInfo mai;
+		mai.allocationSize = requirement.size;
+		mai.memoryTypeIndex = memoryTypeIndex.value();
+		memory = device->allocateMemoryUnique(mai);
+		device->bindBufferMemory(buffer.get(), memory.get(), 0);
+		mapped = reinterpret_cast<T*>(device->mapMemory(memory.get(), 0, memorySize));
+		std::copy(data.begin(), data.end(), mapped);
+	}
+	T* mapped;
+	size_t memorySize;
+	vk::UniqueBuffer buffer;
+	vk::UniqueDeviceMemory memory;
+};
+
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	_In_opt_ HINSTANCE hPrevInstance,
 	_In_ LPWSTR    lpCmdLine,
@@ -571,6 +614,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	dpci.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet;
 	dpci.setPoolSizes(poolSize);
 	dpci.maxSets = 1;
+	auto descPool = device->createDescriptorPoolUnique(dpci);
 
 	vk::DescriptorSetLayoutBinding dslb;
 	dslb.descriptorCount = 3;
@@ -593,6 +637,28 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		std::cerr << "Failed to create compute pipeline: " << computePipeline.result << std::endl;
 		return -1;
 	}
+
+	vk::DescriptorSetAllocateInfo dsai;
+	dsai.descriptorPool = descPool.get();
+	dsai.setSetLayouts(descSetLayout.get());
+	auto descSets = device->allocateDescriptorSetsUnique(dsai);
+
+	StorageBuffer<uint32_t> bufA(device, targetDevice->device, { 0,1,2,3 });
+	StorageBuffer<uint32_t> bufB(device, targetDevice->device, { 4,5,6,7 });
+	StorageBuffer<uint32_t> bufC(device, targetDevice->device, { 0,0,0,0 });
+
+	std::vector<vk::DescriptorBufferInfo> descBufferInfo = {
+		vk::DescriptorBufferInfo(bufA.buffer.get(), 0, bufA.memorySize),
+		vk::DescriptorBufferInfo(bufB.buffer.get(), 0, bufB.memorySize),
+		vk::DescriptorBufferInfo(bufC.buffer.get(), 0, bufC.memorySize),
+	};
+	vk::WriteDescriptorSet wds;
+	wds.setDstSet(descSets[0].get());
+	wds.setDstBinding(0);
+	wds.setDescriptorType(vk::DescriptorType::eStorageBuffer);
+	wds.setDescriptorCount(3);
+	wds.setBufferInfo(descBufferInfo);
+	device->updateDescriptorSets(wds, nullptr);
 
 	vk::CommandPoolCreateInfo poolInfo;
 	poolInfo.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer;
