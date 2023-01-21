@@ -281,13 +281,13 @@ vk::UniqueShaderModule CreateShaderModule(vk::UniqueDevice& device, const std::v
 }
 
 void RecordCommandBuffer(
-	vk::CommandBuffer& cb,
+	vk::UniqueCommandBuffer& cb,
 	vk::UniqueRenderPass& renderPass,
 	vk::UniqueFramebuffer& framebuffer,
 	vk::Extent2D extent,
 	vk::UniquePipeline& pipeline) {
 	vk::CommandBufferBeginInfo cbbi;
-	cb.begin(cbbi);
+	cb->begin(cbbi);
 	vk::RenderPassBeginInfo rpbi;
 	rpbi.renderPass = renderPass.get();
 	rpbi.framebuffer = framebuffer.get();
@@ -296,13 +296,13 @@ void RecordCommandBuffer(
 	rpbi.clearValueCount = 1;
 	vk::ClearValue clearColor(vk::ClearColorValue(0, 0, 0, 1));
 	rpbi.pClearValues = &clearColor;
-	cb.beginRenderPass(rpbi, vk::SubpassContents::eInline);
-	cb.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.get());
-	cb.setViewport(0, vk::Viewport(0, 0, (float)extent.width, (float)extent.height, 0, 1));
-	cb.setScissor(0, vk::Rect2D({ 0,0 }, extent));
-	cb.draw(3, 1, 0, 0);
-	cb.endRenderPass();
-	cb.end();
+	cb->beginRenderPass(rpbi, vk::SubpassContents::eInline);
+	cb->bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.get());
+	cb->setViewport(0, vk::Viewport(0, 0, (float)extent.width, (float)extent.height, 0, 1));
+	cb->setScissor(0, vk::Rect2D({ 0,0 }, extent));
+	cb->draw(3, 1, 0, 0);
+	cb->endRenderPass();
+	cb->end();
 }
 
 enum WindowState {
@@ -400,6 +400,14 @@ struct StorageBuffer {
 		device->bindBufferMemory(buffer.get(), memory.get(), 0);
 		mapped = reinterpret_cast<T*>(device->mapMemory(memory.get(), 0, memorySize));
 		std::copy(data.begin(), data.end(), mapped);
+	}
+
+	void print() {
+		auto elems = memorySize / sizeof(T);
+		for (size_t i = 0; i < elems; i++) {
+			std::cout << mapped[i] << ", ";
+		}
+		std::cout << std::endl;
 	}
 	T* mapped;
 	size_t memorySize;
@@ -638,14 +646,18 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		return -1;
 	}
 
+
 	vk::DescriptorSetAllocateInfo dsai;
 	dsai.descriptorPool = descPool.get();
 	dsai.setSetLayouts(descSetLayout.get());
 	auto descSets = device->allocateDescriptorSetsUnique(dsai);
+	std::vector<uint32_t> dataA = { 0,1,2,3 };
+	std::vector<uint32_t> dataB = { 4,5,6,7 };
+	std::vector<uint32_t> dataC = { 0,0,0,0 };
 
-	StorageBuffer<uint32_t> bufA(device, targetDevice->device, { 0,1,2,3 });
-	StorageBuffer<uint32_t> bufB(device, targetDevice->device, { 4,5,6,7 });
-	StorageBuffer<uint32_t> bufC(device, targetDevice->device, { 0,0,0,0 });
+	StorageBuffer<uint32_t> bufA(device, targetDevice->device, dataA);
+	StorageBuffer<uint32_t> bufB(device, targetDevice->device, dataB);
+	StorageBuffer<uint32_t> bufC(device, targetDevice->device, dataC);
 
 	std::vector<vk::DescriptorBufferInfo> descBufferInfo = {
 		vk::DescriptorBufferInfo(bufA.buffer.get(), 0, bufA.memorySize),
@@ -660,6 +672,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	wds.setBufferInfo(descBufferInfo);
 	device->updateDescriptorSets(wds, nullptr);
 
+
+
 	vk::CommandPoolCreateInfo poolInfo;
 	poolInfo.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer;
 	poolInfo.queueFamilyIndex = targetDevice->graphicsIndex;
@@ -669,8 +683,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	vk::CommandBufferAllocateInfo cbai;
 	cbai.commandPool = commandPool.get();
 	cbai.level = vk::CommandBufferLevel::ePrimary;
-	cbai.commandBufferCount = MAX_FRAMES_IN_FLIGHT;
-	auto commandBuffers = device->allocateCommandBuffers(cbai);
+	cbai.commandBufferCount = MAX_FRAMES_IN_FLIGHT + 1; // +1 for compute pipeline
+	auto commandBuffers = device->allocateCommandBuffersUnique(cbai);
 
 	std::vector<ResourcePerFrame> frameResources(MAX_FRAMES_IN_FLIGHT);
 
@@ -681,6 +695,23 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		rpf.inFlight = device->createFenceUnique(vk::FenceCreateInfo(vk::FenceCreateFlagBits::eSignaled));
 	}
 	auto graphicsQueue = device->getQueue(targetDevice->graphicsIndex, 0);
+
+	// run compute first
+	auto& ccb = commandBuffers[MAX_FRAMES_IN_FLIGHT];
+	ccb->reset();
+	ccb->begin(vk::CommandBufferBeginInfo());
+	ccb->bindPipeline(vk::PipelineBindPoint::eCompute, computePipeline.value.get());
+	ccb->bindDescriptorSets(vk::PipelineBindPoint::eCompute, computePipelineLayout.get(), 0, descSets[0].get(), nullptr);
+	ccb->dispatch(dataA.size(), 1, 1);
+	ccb->end();
+	vk::SubmitInfo computeSubmit;
+	computeSubmit.setCommandBuffers(ccb.get());
+	graphicsQueue.submit(computeSubmit);
+	graphicsQueue.waitIdle();
+	bufA.print();
+	bufB.print();
+	bufC.print();
+
 	RECT rect;
 	if (!GetWindowRect(hwnd.value(), &rect)) {
 		std::cerr << "Failed to get window size" << std::endl;
@@ -729,7 +760,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 			auto result = device->waitForFences(rpf.inFlight.get(), true, UINT64_MAX);
 			device->resetFences(rpf.inFlight.get());
 			auto index = device->acquireNextImageKHR(swapchainResources.swapchain.get(), UINT64_MAX, rpf.imageAvailable.get(), nullptr);
-			cb.reset();
+			cb->reset();
 			RecordCommandBuffer(cb, renderPass, swapchainResources.frameBuffers[index.value], extent, graphicsPipeline.value);
 			vk::SubmitInfo submitInfo;
 			submitInfo.waitSemaphoreCount = 1;
@@ -737,7 +768,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 			vk::PipelineStageFlags waitStages[] = { vk::PipelineStageFlagBits::eColorAttachmentOutput };
 			submitInfo.pWaitDstStageMask = waitStages;
 			submitInfo.commandBufferCount = 1;
-			submitInfo.pCommandBuffers = &cb;
+			submitInfo.pCommandBuffers = &cb.get();
 			submitInfo.signalSemaphoreCount = 1;
 			submitInfo.pSignalSemaphores = &rpf.renderFinished.get();
 			graphicsQueue.submit(submitInfo, rpf.inFlight.get());
