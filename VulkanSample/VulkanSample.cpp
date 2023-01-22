@@ -673,7 +673,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	device->updateDescriptorSets(wds, nullptr);
 
 
-
 	vk::CommandPoolCreateInfo poolInfo;
 	poolInfo.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer;
 	poolInfo.queueFamilyIndex = targetDevice->graphicsIndex;
@@ -688,6 +687,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
 	std::vector<ResourcePerFrame> frameResources(MAX_FRAMES_IN_FLIGHT);
 
+	auto computeRunning = device->createFenceUnique(vk::FenceCreateInfo(vk::FenceCreateFlagBits::eSignaled));
 	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
 		auto& rpf = frameResources[i];
 		rpf.imageAvailable = device->createSemaphoreUnique(vk::SemaphoreCreateInfo());
@@ -695,22 +695,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		rpf.inFlight = device->createFenceUnique(vk::FenceCreateInfo(vk::FenceCreateFlagBits::eSignaled));
 	}
 	auto graphicsQueue = device->getQueue(targetDevice->graphicsIndex, 0);
-
-	// run compute first
-	auto& ccb = commandBuffers[MAX_FRAMES_IN_FLIGHT];
-	ccb->reset();
-	ccb->begin(vk::CommandBufferBeginInfo());
-	ccb->bindPipeline(vk::PipelineBindPoint::eCompute, computePipeline.value.get());
-	ccb->bindDescriptorSets(vk::PipelineBindPoint::eCompute, computePipelineLayout.get(), 0, descSets[0].get(), nullptr);
-	ccb->dispatch(dataA.size(), 1, 1);
-	ccb->end();
-	vk::SubmitInfo computeSubmit;
-	computeSubmit.setCommandBuffers(ccb.get());
-	graphicsQueue.submit(computeSubmit);
-	graphicsQueue.waitIdle();
-	bufA.print();
-	bufB.print();
-	bufC.print();
 
 	RECT rect;
 	if (!GetWindowRect(hwnd.value(), &rect)) {
@@ -740,6 +724,26 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		}
 		else {
 			Sleep(10);
+			// run compute first
+			auto result = device->waitForFences(computeRunning.get(), true, UINT64_MAX);
+			device->resetFences(computeRunning.get());
+			auto& ccb = commandBuffers[MAX_FRAMES_IN_FLIGHT];
+			ccb->reset();
+			ccb->begin(vk::CommandBufferBeginInfo());
+			ccb->bindPipeline(vk::PipelineBindPoint::eCompute, computePipeline.value.get());
+			ccb->bindDescriptorSets(vk::PipelineBindPoint::eCompute, computePipelineLayout.get(), 0, descSets[0].get(), nullptr);
+			ccb->dispatch(dataA.size(), 1, 1);
+			ccb->end();
+			vk::SubmitInfo computeSubmit;
+			computeSubmit.setCommandBuffers(ccb.get());
+			graphicsQueue.submit(computeSubmit, computeRunning.get());
+			//graphicsQueue.waitIdle();
+			//if ((numFrames % 100) == 0) {
+			//	bufA.print();
+			//	bufB.print();
+			//	bufC.print();
+			//}
+
 			if (eventDetector.AreaIsZero()) {
 				// Don't render when window area is zero
 				continue;
@@ -757,7 +761,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 			auto& cb = commandBuffers[commandBufferIndex];
 			auto& rpf = frameResources[commandBufferIndex];
 			// render
-			auto result = device->waitForFences(rpf.inFlight.get(), true, UINT64_MAX);
+			result = device->waitForFences(rpf.inFlight.get(), true, UINT64_MAX);
 			device->resetFences(rpf.inFlight.get());
 			auto index = device->acquireNextImageKHR(swapchainResources.swapchain.get(), UINT64_MAX, rpf.imageAvailable.get(), nullptr);
 			cb->reset();
